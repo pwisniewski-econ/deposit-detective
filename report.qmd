@@ -1,0 +1,117 @@
+---
+format: 
+  pdf:
+    number-sections: true
+    block-headings: false
+    fig-format: pdf
+    code-block-border-left: "#5b5b5b"
+    code-block-bg: "#fafafa "
+    highlight-style: pygments
+    documentclass: article
+    toc: false
+    toc-depth: 2
+    toccolor: black
+    citecolor: black
+    urlcolor: gray
+    fontsize: "12pt"
+    include-before-body: 
+      - text: |
+          \input{ressources/pre_text.tex}
+    include-in-header:
+      - text: |
+          \usepackage{graphicx}
+          \usepackage{pdflscape}
+          \usepackage{pdfpages}
+          \newcommand*{\boldone}{\text{\usefont{U}{bbold}{m}{n}1}}
+          \usepackage[a4paper, portrait, footnotesep=0.75cm, margin=2.54cm]{geometry}
+          \usepackage{enumitem}
+          \usepackage{parskip}
+          \usepackage{titling}
+          \linespread{1.5}
+          \usepackage[T1]{fontenc}
+          \usepackage[hidelinks]{hyperref}
+          \hypersetup{linkcolor={black}}
+          \usepackage{amsmath}
+          \usepackage{amsfonts}
+          \usepackage[normalem]{ulem}
+          \usepackage{times}
+          \usepackage{sectsty}
+          \newcommand{\ts}{\textsuperscript}
+    pdf-engine: pdflatex
+---
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+library(tidyverse)
+library(cowplot)
+library(data.table)
+library(sf)
+library(showtext)
+library(here)
+font_add(family = "Times", regular = "ressources/Times-New-Roman.otf")
+showtext_auto()
+showtext_opts(dpi = 300)
+
+knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
+```
+
+\clearpage
+
+# Introduction and Relevant Literature
+
+
+\newpage
+
+# Data
+
+## Marketing Campaign
+
+## Descriptive Statistics
+
+## Exploratory Analysis
+
+\newpage
+
+# Methodology and Identification
+
+## PICO process
+
+## DAG and Hypothesis
+
+## Econometrics and Machine Learning
+
+\newpage
+
+# Results
+
+## Weekdays
+
+## Calendar
+
+## Macro Context
+
+## Heterogeneity Analysis
+
+## Discussion
+
+\newpage
+
+# Limitations and Avenues for Improvements
+
+\newpage
+
+# Bibliography
+
+\newpage
+
+\setcounter{section}{0}
+\renewcommand\thesection{\Alph{section}}
+
+# Appendix
+
+## Robustness
+
+## Robustness 
+
+## Robustness
+
+

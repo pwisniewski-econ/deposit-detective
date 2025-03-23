@@ -47,3 +47,10 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Additional
+*.pdf
+!firstPage.pdf
+*.png
+*.tmp
+
