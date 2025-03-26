@@ -58,6 +58,8 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 # Introduction and Relevant Literature
 
+The Mobile Marketing Association defines telemarketing as, “A set of practices that enables organisations to communicate and engage with their audience in an interactive and relevant manner through any mobile device or network.” Telemarketing has been widely use in the banking sector as a way to engage with customers in cost-efficient and personalized manner. It became popular in the 1980s and financial institutions started to set up call centers and build consumer databases. The objective was to reach more people and stop relying on in-person sales. With telemarketing, banks could promote specific products like loans, credit cards or term deposits. 
+
 
 \newpage
 
