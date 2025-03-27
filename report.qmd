@@ -16,7 +16,7 @@ format:
     fontsize: "12pt"
     include-before-body: 
       - text: |
-          \input{ressources/pre_text.tex}
+          \input{ressources/title-page/title-page.tex}
     include-in-header:
       - text: |
           \usepackage{graphicx}
@@ -36,6 +36,8 @@ format:
           \usepackage[normalem]{ulem}
           \usepackage{times}
           \usepackage{sectsty}
+          \usepackage{ressources/tikz/tikzit}
+          \input{ressources/tikz/tikz.tikzstyles}
           \newcommand{\ts}{\textsuperscript}
     pdf-engine: pdflatex
 ---
@@ -47,7 +49,7 @@ library(data.table)
 library(sf)
 library(showtext)
 library(here)
-font_add(family = "Times", regular = "ressources/Times-New-Roman.otf")
+font_add(family = "Times", regular = "ressources/fonts/Times-New-Roman.otf")
 showtext_auto()
 showtext_opts(dpi = 300)
 
@@ -64,6 +66,12 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 # Data
 
 ## Marketing Campaign
+
+\begin{figure}
+\centering
+\caption{Campaign Process and Observed Data}
+\tikzfig{ressources/tikz/fig1}
+\end{figure}
 
 ## Descriptive Statistics
 
