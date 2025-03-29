@@ -1,0 +1,55 @@
+\begin{tikzpicture}[scale=1.75, transform shape=false]
+	\begin{pgfonlayer}{nodelayer}
+		\node [style=none] (0) at (0.75, 7) {};
+		\node [style=none] (1) at (0, 4.5) {};
+		\node [style=none] (2) at (9.25, 4) {};
+		\node [style=none, align=center, text={rgb,255: red,191; green,0; blue,64}] (4) at (5, 2) {Demand \\ Shock$_t$};
+		\node [style=none] (5) at (6, 8) {Unemp$_t$};
+		\node [style=none, align=center] (6) at (14.75, 4) {Individual\\ Factors$_i$};
+		\node [style=none, text={rgb,255: red,0; green,128; blue,128}] (7) at (0, 7) {IR$_{t-1}$};
+		\node [style=none, text={rgb,255: red,0; green,128; blue,128}] (8) at (0, 4) {IR$_t$};
+		\node [style=none] (9) at (0.5, 4) {};
+		\node [style=none] (10) at (10.75, 4) {Outcome$_{it}$};
+		\node [style=none] (11) at (0, 3.5) {};
+		\node [style=none] (13) at (6.5, 2) {};
+		\node [style=none] (14) at (4.75, 8) {};
+		\node [style=none] (16) at (13.5, 4) {};
+		\node [style=none] (17) at (12.25, 4) {};
+		\node [style=none] (18) at (10.75, 4.5) {};
+		\node [style=none] (19) at (0, 6.25) {};
+		\node [style=none] (20) at (6, 7) {Housing$_{it}$};
+		\node [style=none] (21) at (4.75, 7) {};
+		\node [style=none] (22) at (4.75, 6) {};
+		\node [style=none] (23) at (6, 6) {Default$_{it}$};
+		\node [style=none] (24) at (7.25, 8) {};
+		\node [style=none] (25) at (7.25, 7) {};
+		\node [style=none] (26) at (7.25, 6) {};
+		\node [style=none] (27) at (10.75, 7) {};
+		\node [style=none] (28) at (10.75, 2) {};
+		\node [style=none] (29) at (10.75, 3.5) {};
+		\node [style=none] (30) at (0, 2) {};
+		\node [style=none] (31) at (3.5, 2) {};
+		\node [style=none] (33) at (1.5, 7.5) {};
+		\node [style=none] (34) at (1.5, 6.5) {};
+		\node [style=none] (35) at (1.75, 7.75) {};
+		\node [style=none] (36) at (1.75, 6.25) {};
+	\end{pgfonlayer}
+	\begin{pgfonlayer}{edgelayer}
+		\draw [style=Arrow-Blue] (9.center) to (2.center);
+		\draw [style=Arrow] (0.center) to (14.center);
+		\draw [style=Arrow] (16.center) to (17.center);
+		\draw [style=Arrow-Blue] (19.center) to (1.center);
+		\draw [style=Arrow] (0.center) to (21.center);
+		\draw [style=Arrow] (0.center) to (22.center);
+		\draw [style=line] (24.center) to (27.center);
+		\draw [style=line] (25.center) to (27.center);
+		\draw [style=line] (26.center) to (27.center);
+		\draw [style=line-red, in=180, out=0] (13.center) to (28.center);
+		\draw [style=Arrow-Red, in=270, out=90] (28.center) to (29.center);
+		\draw [style=Arrow-Red, in=270, out=90] (30.center) to (11.center);
+		\draw [style=line-red, in=360, out=180] (31.center) to (30.center);
+		\draw (33.center) to (34.center);
+		\draw (35.center) to (36.center);
+		\draw [style=Arrow] (27.center) to (18.center);
+	\end{pgfonlayer}
+\end{tikzpicture}
