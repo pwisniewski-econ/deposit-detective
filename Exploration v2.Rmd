@@ -1,0 +1,409 @@
+---
+title: "Data analysis: Marketing Campaign Impact on Term Deposit Subscriptions - A Comparative Analysis of Causal Inference Methods"
+output: html_document
+date: "2025-03-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Description of Problem
+
+This project leverages a Marketing Dataset from a Portuguese banking institution to identify factors that influence a customer's likelihood of subscribing to term deposits during a marketing campaign. Additionally, it evaluates the impact of direct calls on subscription rates. This project aims to compare the traditional ML causal inference methods, such as matching, with modern ML-based approaches like Double ML.
+
+## Overview of data
+The data is related with direct marketing campaigns of a Portuguese banking institution. The marketing campaigns were based on phone calls. Often, more than one contact to the same client was required, in order to access if the product (bank term deposit) would be ('yes') or not ('no') subscribed. The product in question (i.e., the bank term deposit) is a savings account that allows you to have interest in return for the unavailability of the money that's put in for a certain period of time.
+
+This dataset is based on "Bank Marketing" UCI dataset (link: http://archive.ics.uci.edu/ml/datasets/Bank+Marketing). Additionally, it is enriched with five new social and economic features/attributes (nation-wide indicators from a ~10M population country), published by the Banco de Portugal and publicly available at: https://www.bportugal.pt/estatisticasweb. The reason the authors enriched the dataset with these socio-economic variables is because they found the addition lead to substantial improvement in the prediction of a success, even when the duration of the call is not included.
+
+The data is ordered by date (from May 2008 to November 2010). Additionally, for testing the performance of computationally intensive models, the file bank-additional.csv with 10% of the examples (4119), randomly selected from bank-additional-full.csv is provided.
+
+Additionally, we know from the outset that this database is trimmed for all the attempted outbound calls made which did not get answered i.e., all the people that were contacted unexpectedly who did not pick up over the course of the entire marketing campaign. Furthermore, we know from the paper that there were two types of calls - outbound and inbound calls - where the former is the situation where the bank does pure cold-calling and covers the entire database of potential contacts without selection (i.e., hence why the paper was exploring whether to do a predictive algorithm to improve efficiency of the cold-calling process through better targeting) and the latter which is the situation where an individual calls the bank for another reason and is also marketed this product.
+
+## Variables for bank additional dataset
+This is supposedly the cleaner dataset but has some variables omitted from the original bank dataset and the addition of the MACRO variables (which was explained in the paper to have signicantly improved the predictive performance of the ML algorithms).
+
+### Variables related to bank client data:
+
+  * age (numeric)
+  * job : type of job (categorical: "admin.","blue-collar","entrepreneur","housemaid","management","retired","self-employed","services","student","technician","unemployed","unknown")
+  * marital : marital status (categorical: "divorced","married","single","unknown"; note: "divorced" means divorced or widowed)
+  *education (categorical: "basic.4y","basic.6y","basic.9y","high.school","illiterate","professional.course","university.degree","unknown")
+  * default: has credit in default? (categorical: "no","yes","unknown")
+  * housing: has housing loan? (categorical: "no","yes","unknown")
+  * loan: has personal loan? (categorical: "no","yes","unknown")
+
+### Variables related to the previous attempts at being contacted:
+
+  * contact: contact communication type (categorical: "cellular","telephone") 
+  * month: last contact month of year (categorical: "jan", "feb", "mar", ..., "nov", "dec")
+  * day_of_week: last contact day of the week (categorical: "mon","tue","wed","thu","fri")
+  * duration: last contact duration, in seconds (numeric). Important note:  this attribute highly affects the output target (e.g., if duration=0 then y="no"). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.
+  * campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+  * pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric; 999 means client was not previously contacted)
+  * previous: number of contacts performed before this campaign and for this client (numeric)
+  * poutcome: outcome of the previous marketing campaign (categorical: "failure","nonexistent","success")
+
+### Variables related to the state of the economy 
+
+  * emp.var.rate: employment variation rate - quarterly indicator (numeric)
+  * cons.price.idx: consumer price index - monthly indicator (numeric)     
+  * cons.conf.idx: consumer confidence index - monthly indicator (numeric)     
+  * euribor3m: euribor 3 month rate - daily indicator (numeric)
+  * nr.employed: number of employees - quarterly indicator (numeric)
+
+### Outcome variable:
+  * y - has the client subscribed a term deposit? (binary: "yes","no")
+
+## Missing values (for both datasets):
+There are several missing values in several variables, all coded with the "unknown" label. 
+
+## Variables for bank dataset
+This dataset does not contain any macro-related variables as well as the day of the week variable (i.e., on what day of the working week did the call take place). However, it does include the following variables which are not included in the final clean dataset (i.e., bank additional full):
+
+ * balance - average yearly balance, in euros (numeric) 
+ * day: last contact day of the month (numeric)
+
+## PICO formulation:
+
+  * Population : Who are we interested in? - Portuguese potential customers being contacted or contacting the bank
+  * Intervention : What treatment/intervention do we study? - Marketing campaign aspects (*Note: there are different aspects we will explore*)
+  1) the call taking place in the middle of the working week ("business mindset") vs the rest of the week ("leisure or work catchup" mindset) 
+  2) the call taking place at the end of the month vs the rest of the month or the beginning of the month vs the rest of the month (i.e., because people tend to have higher account balances at the beginning of the month relative to the end)
+  * Control : What are we comparing it to/who is our control group:
+  Population with different characteristics e.g., different economic context, different job, different number of calls prior to current call etc.
+  * Outcome : What are we interested in? - Likelihood of subscribing to the term deposit product
+  * Time : Outcome is determined after call ends (i.e., directly after treatment)
+  
+```{r packages}
+# Packages:
+library(data.table)
+library(dplyr)
+library(corrplot) # for correlation plot
+library(GGally) # for plotting
+library(DiagrammeR) # for DAG
+library(DoubleML) # for double debiased ML
+library(mlr3)
+#install.packages("arrow")
+library(arrow) # for opening up .feather files
+# Install packages if they are not already installed
+# install.packages(c("mice", "ggplot2", "naniar"))
+
+# Load the packages
+library(mice)
+library(ggplot2)
+library(naniar)
+```  
+
+```{r loading data + high-level exploration}
+# Packages:
+# data <- read.csv("bank-additional-full.csv", sep = ";")
+data_table <- fread("data/marketing/bank-additional-full.csv", sep = ";")
+data_table_unclean <- fread("data/marketing/bank-full.csv", sep = ";")
+
+# classifying variables other than the outcome
+categorical_variable_names  <- c("job", "marital", "education", "default", "housing",
+                                 "housing", "loan", "contact", "month", "day_of_week",
+                                 "poutcome")
+numerical_variable_names <- c("age", "duration", "campaign", "pdays", "previous",
+                              "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed",
+                              "emp.var.rate")
+
+summary(data_table)
+
+head(data_table)
+```
+
+## Outcome variable:
+```{r outcome variable exploration}
+# looking at the outcome
+print("outcome - y")
+table(data_table$y) # imbalanced in favour of "no", this imbalance further makes sense 
+#               when considering each row is an attempt and not an individual
+```
+
+Looking at the outcome, there is an imbalance in favour of "no", which makes sense independently of the structure of the dataset given we would expect that most people contacted would not subscribe to the product. Considering the structure of the dataset, this imbalance makes further sense when considering each row is an attempt and not an individual, so even if an individual eventually agrees to subscribe, we would consider all the previous unsuccessful attempts.
+
+## Categorical variables:
+```{r categorical variable exploration}
+# looking at categorical variables
+print("job")
+table(data_table$job)
+print("marital status")
+table(data_table$marital)
+print("level of education")
+table(data_table$education)
+print("currently has credit in default?")
+table(data_table$default) # Variable: currently has credit in default
+print("currently has a housing loan?")
+table(data_table$housing) # Variable: currently has a housing loan
+print("currently has a personal loan?")
+table(data_table$loan)
+print("medium of contact")
+table(data_table$contact)
+print("month contacted")
+table(data_table$month) # By far most contacts done in May, and very few in December
+print("day of the week contacted")
+table(data_table$day_of_week) # equally split between work days of the week
+print("outcome of last marketing campaign")
+table(data_table$poutcome) # Variable: previous outcome of the last marketing campaign - most potential customers haven't been involved in previous campaigns (see previous)
+```
+
+Looking at the categorical variables, a striking feature is that the successful contacts are spread out equally between the work days of the week, which is likely a supply-side feature more than a demand-side one (i.e., it is more likely that the firm's employees work equally throughout the week. Another interesting feature is that by far, most successful contacts were carried out in May, which may be a demand-side pressure (i.e., are customers more likely to answer shortly before the summer period to anticipate large spends during the summer?), and then there are very few contacts carried out in December, likely due to the holidays. Additionally, using the poutcome variable, we can see that most of the potential customers successfully contacted are those who have not been involved in previous campaigns, which makes sense, as they are likely to have more success with contacts with customers who have not been contacted before than those who have and have declined to subscribe. 
+
+## Numerical variables:
+```{r numerical variable exploration}
+# looking at numerical variables
+print("age")
+summary(data_table$age) # 17-98 years old potential customers
+print("contact duration in seconds")
+summary(data_table$duration) # last contact duration in seconds 102-4918 seconds, on average 258 seconds (~4 mins)
+print("number of previous contacts in current campaign")
+summary(data_table$campaign) # number of previous contacts in CURRENT CAMPAIGN, 1-56 times, on average contacted 2.6 times
+print("number of days passed since last contact")
+summary(data_table$pdays) # number of days since last contact, 0-999 days, on average contacted 962.5 days
+# mode (top 3 most frequent) - 999 is by far most frequent
+print("3 most frequent values of this variable")
+names(sort(-table(data_table$pdays)))[1:3] 
+print("number of previous contacts in previous campaign")
+summary(data_table$previous) # number of previous contacts in PREVIOUS CAMPAIGN, 0-7 times, on average contacted 0.173 times
+print("consumer price index")
+summary(data_table$cons.price.idx) # 
+print("consumer confidence index")
+summary(data_table$cons.conf.idx) # 
+print("Euribor 3m")
+summary(data_table$euribor3m) # 
+print("Number of employed quarterly")
+summary(data_table$nr.employed) # 
+print("Employment variation rate")
+summary(data_table$emp.var.rate)
+```
+
+```{r plots, echo=FALSE}
+# looking at numerical variables
+hist(data_table$age, xlim = c(0,100), ylim = c(0, 0.05), freq = FALSE, main = "Histogram of age", 
+     xlab = "age") #slight positive skew
+hist(data_table$duration, ylim = c(0, 0.002), freq = FALSE, main = "Histogram of phone call duration",
+     xlab = "phone call duration") # very positive skew - most phone calls are short, makes sense
+#                                                             (most individuals contacted may not want to stay on the call that long)
+hist(data_table$campaign, freq = FALSE, ylim = c(0, 0.2), main = "Histogram of number of contacts during current campaign",
+     xlab = "number of contacts during current campaign") # very positive skew - most potential customers are contacted very few times previously - makes sense
+#                                         (customers may ask not to be contacted again)
+hist(data_table$pdays, freq = FALSE, main = "Histogram of days since last contact",
+     xlab = "days since last contact") # very discrete distribution - in reality almost all people are contacted 999 days
+#                                         (encoding which signifies people were not contacted in the previous campaign)
+hist(data_table$previous, freq = FALSE, main = "Histogram of number of contacts in previous campaigns",
+     xlab = "number of contacts in previous campaigns", ylim = c(0, 2)) # very positive skew - most potential customers are contacted very few times in campaigns before - makes sense
+#                                         (focusing on a new pool of potential customers in new campaign to increase p. of getting a positive result - see poutcome)
+
+hist(data_table$cons.price.idx, freq = FALSE, main = "Histogram of consumer price index", xlab = "consumer price index", ylim = c(0,2)) # 
+hist(data_table$cons.conf.idx, freq = FALSE, main = "Histogram of consumer confidence index", xlab = "consumer confidence index", ylim = c(0,2)) # 
+hist(data_table$euribor3m, freq = FALSE, main = "Histogram of Euribor 3m", xlab = "Euribor 3m") # 
+hist(data_table$nr.employed, freq = FALSE, main = "Histogram of number of employed quarterly",
+     xlab = "number of employed quarterly") # 
+hist(data_table$emp.var.rate, freq = FALSE, main = "Histogram of quarterly variation in employment",
+     xlab = "quarterly variation in employment") # 
+```
+
+Looking at the numerical variables, we see for instance, that successfully contacted potential customers are aged 17-98, with a positive skew i.e., most individuals contacted are working-age individuals. Additionally, there are quite a lot of positively skewed variables in the variables related to campaign statistics. For example, last contact duration, number of previous contacts in the current campaign, the number of days since the last contact, and the number of previous contacts in previous campaigns. This makes sense given that most individuals won't want to be called at all, may ask not to be contacted again or will not pick up again, and won't want to spend much time on the phone for a marketing. Furthermore, we can see that this campaign has mostly managed to access a new pool of potential customers in and this is likely due to previously contacted customers being less susceptible to change their mind if previously contacted.  Interestingly, the number of days since last contact variable is very discrete, the vast majority of individuals were contacted 999 days after the last contact, however, this is an encoding for the fact that people were not contacted in the previous campaign, and will need to be recoded.
+
+Additionally, we can see that on average, for those who pick up people spend around 4 mins on the marketing call.
+
+In terms of the economy-related variables corresponding to Portugal, it seems potential customers are mostly successfully contacted:
+
+  * in deflationary periods
+  * in periods of low consumer confidence
+  * Euribor3m is high - i.e., when return of savings account is likely to be high
+  * when employment is decreasing to very low growth
+  
+So overall, it seems that customers tend to be successfully contacted when future expectations of the future economy are low, and so may want to plan ahead financially and consequently, be more open to getting the product proposed.
+
+## Simple success rate over campaign factors
+```{r success rate by factor, echo=FALSE}
+# over the days of the week
+data_table_day_of_week <- data_table %>%
+  mutate(y= ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) %>%
+  group_by(day_of_week) %>%
+  summarise(success = mean(y, na.rm = TRUE))
+print(data_table_day_of_week)
+
+data_table_month <- data_table %>%
+  mutate(y= ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) %>%
+  group_by(month) %>%
+  summarise(success = mean(y, na.rm = TRUE))
+print(data_table_month)
+```
+There seems to be a lot of variation between months but this could be due to the bulk of the data being from pre-2008 financial crisis and so this may be more the MACRO aspect of moment relative to the crisis more than general seasonality.
+
+## Correlation plot of numerical variables
+```{r corplots, echo=FALSE}
+# correlation plot
+numeric_data <- data_table[, lapply(.SD, as.numeric), .SDcols = numerical_variable_names]
+
+numeric_data_wo_na <- na.omit(numeric_data)
+# Compute the correlation matrix
+cor_matrix <- cor(numeric_data_wo_na)
+cor_matrix
+#corrplot(numeric_data_wo_na)
+ggcorr(numeric_data_wo_na, hjust = 0.75, size = 5, color = "grey50", layout.exp = 1)
+```
+
+Here, we will mostly explore the relationship between the marketing campaign variables and other variables (i.e., not focusing on the relationship between MACRO variables) where there are not very strong correlations. For example, we see that previous and pdays are negatively correlated. As a reminder, previous is the number of contacts performed in the last campaign and pdays is the number of days since the last contact. It makes sense that the more contacts there have been, the fewer the days there tends to be since the last contact. 
+
+Finally, there seems to be a negative correlation between previous (i.e., number of contacts in the previous campaign) and Euribor 3m and number of individuals in the quarter (both markers of growth). This could be due to business cycle fluctuations - it may be that if there were high levels of growth in the current campaign, that there may have been low levels of growth in the previous campaign, therefore the telemarketers were calling people less due to reduced optimism in the previous campaign or that people were more often asked not to be called again due to a savings product being less pertinent given the state of the economy. 
+## Considerations for next steps
+
+After data exploration, we have seen that in the original dataset (i.e., bank full), we have a strong suspicion of duplicate values, as seen as rows of very unlikely combinations with a different number of campaign values (i.e., total number of succesful contacts) which suggests there were several rows that correspond to the same individual over time. However, we assume this is minor and as the final dataset (i.e., bank additional full) is corrected and cleaned, we assume this to be not an issue at all in this dataset.
+
+Additionally, we can explore data imputation techniques to deal with "unknown" values in all variables.
+
+## Selection of Methods
+
+Double (post) lasso doesn't make much sense given we have a very long panel data here.
+
+We will be doing:
+* Matching
+* Double Debiased ML
+
+## Variables of interest for the first problem (i.e., Day of the Week)
+We need to define our variable of treatment, outcome and variable for suspected heterogeneity in treatment:
+* Y = subscribing to the product or not (i.e., outcome of marketing campaign: success vs failure)
+* D = being contacted during the Monday/Friday vs being contacted in the rest of the week
+
+Our intuition for the last one is we noticed that there are many more successes in the middle of the week rather than the rest of the week and this is likely due to a sort of "leisure/busy mindset" in the sense that people might be less open to unsolicited calls on friday/weekend when it is their leisure time, and Monday may be a sort of catch-up day for work in which case people might be too busy to have the time for such a call. This might be the reason why calls may be more successful in the middle of the working week.
+
+Recalling the variables that will be used in the construction of the treatment variable (D):
+  * campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+  * previous: number of contacts performed before this campaign and for this client (numeric)
+  
+Recalling the variables that will be used in the construction of the Heterogeneity variable (Z):
+  * day_of_week: last contact day of the week (categorical: "mon","tue","wed","thu","fri")
+  
+## Process of cleaning databases
+
+<!-- !!! To edit !!!- i.e., how Patryk à crée les datasets feather. -->
+
+
+Here below, I am using a cleaned and reformatted databases and filtering for successful contacts where it was the only contact of the campaign, as in the paper it mentioned that most of the following contacts were at the request of the customer, and therefore, not realistically a lever of the campaign the bank can control.
+
+```{r loading data reformatted + high-level exploration}
+# Clearing environment from old variables
+rm(data_table)
+rm(data_table_month)
+rm(data_table_day_of_week)
+rm(cor_matrix)
+rm(data_table_unclean)
+rm(numeric_data)
+rm(numeric_data_wo_na)
+
+# Read the .feather file
+data_table_bank <- as.data.table(arrow::read_feather("results_building/bank-full.feather"))
+data_table_bank_additional <- as.data.table(arrow::read_feather("results_building/bank-additional-full.feather"))
+
+dt_bank_filtered <- data_table_bank %>%
+  filter(campaign == 1)
+
+dt_bank_additional_filtered <- data_table_bank_additional %>%
+  filter(campaign == 1)
+
+print(summary(dt_bank_filtered))
+print(head(dt_bank_filtered))
+print(summary(dt_bank_additional_filtered))
+print(head(dt_bank_additional_filtered))
+```
+
+Below, we've have filtered the "cleaner" dataset for where the total campaign contacts are equal to 1 to account for the fact that making multiple contacts is mostly exogenous to the bank. 
+
+Additionally, I've recoded the pdays values, as well as the treatment 
+
+We've looked at which variables are coded as having missing values, and found the following:
+
+* job - 158 unknown values
+* marital - 36 unknown values
+* education - 740 unknown values
+* default - 3481 unknown values
+* housing - 415 unknown values
+* loan - 415 unknown values 
+
+Assuming the missing values are MAR, I then use the MICE package adopting the default imputation function to generate m inputed datasets :
+
+* pmm: predictive mean matching (numeric data) 
+* logreg: logistic regression imputation (binary data, factor with 2 levels) 
+* polyreg: polytomous regression imputation for unordered categorical data (factor > 2 levels) 
+* polr: proportional odds model for (ordered, > 2 levels).
+
+and using the following literature to inform m = 5:
+
+* Bennet (2001) recommends choosing m between 5 and 10
+* Hawthorne and Elliott (2005) claim m value should be usually less than 10
+* Royston et al. recommend choosing m=3 or m=5
+
+```{r recoding + imputation}
+# Filtering for total campaign contacts being equal to 1
+data_table_additional_filtered <- data_table_bank_additional %>%
+  filter(campaign == 1)
+
+# Recoding treatment
+#unique(data_table$day_of_week)
+open_mindset_days <- c("tue", "wed", "thu")
+closed_mindset_days <- c("mon", "fri")
+
+# Recoding the pdays variable in the "clean" dataset
+data_table_additional_filtered <- data_table_additional_filtered %>%
+  mutate(pdays = ifelse(pdays == "999", "not from a prev. campaign", pdays)) %>%
+  mutate(D = ifelse(day_of_week %in% open_mindset_days, 1, 0)) %>%
+  mutate(Y = ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) 
+
+# Finding unknowns / missing values
+colnames(data_table_additional_filtered)
+sum(is.na(data_table_additional_filtered$age))
+sum(data_table_additional_filtered$age == "unknown")
+sum(is.na(data_table_additional_filtered$job))
+sum(data_table_additional_filtered$job == "unknown") # 158 unknown values
+sum(is.na(data_table_additional_filtered$marital))
+sum(data_table_additional_filtered$marital == "unknown") # 36 unknown values
+sum(is.na(data_table_additional_filtered$education))
+sum(data_table_additional_filtered$education == "unknown") # 740 unknown values
+sum(is.na(data_table_additional_filtered$default))
+sum(data_table_additional_filtered$default == "unknown") # 3481 unknown values
+sum(is.na(data_table_additional_filtered$housing))
+sum(data_table_additional_filtered$housing == "unknown") # 415 unknown values
+sum(is.na(data_table_additional_filtered$loan))
+sum(data_table_additional_filtered$loan == "unknown") # 415 unknown values
+sum(is.na(data_table_additional_filtered$contact))
+sum(data_table_additional_filtered$contact == "unknown")
+sum(is.na(data_table_additional_filtered$month))
+sum(data_table_additional_filtered$month == "unknown")
+sum(is.na(data_table_additional_filtered$day_of_week))
+sum(data_table_additional_filtered$day_of_week == "unknown")
+sum(is.na(data_table_additional_filtered$duration))
+sum(data_table_additional_filtered$duration == "unknown")
+sum(is.na(data_table_additional_filtered$campaign))
+sum(data_table_additional_filtered$campaign == "unknown")
+sum(is.na(data_table_additional_filtered$pdays))
+sum(data_table_additional_filtered$pdays == "unknown")
+sum(is.na(data_table_additional_filtered$previous))
+sum(data_table_additional_filtered$previous == "unknown")
+sum(is.na(data_table_additional_filtered$poutcome))
+sum(data_table_additional_filtered$poutcome == "unknown")
+
+# Recoding "unknown" values as missing values 
+data_table_additional_filtered <- data_table_additional_filtered %>%
+  mutate(job = ifelse(job == "unknown", NA, job),
+         marital = ifelse(marital == "unknown", NA, job),
+         education = ifelse(education == "unknown", NA, job),
+         default = ifelse(default == "unknown", NA, job),
+         housing = ifelse(housing == "unknown", NA, job),
+         loan = ifelse(loan == "unknown", NA, job),
+         )
+
+##  To look at imputation methods
+# Set the seed for reproducibility
+set.seed(12345)
+
+# Perform Multiple Imputation
+# Source: https://libguides.princeton.edu/R-Missingdata
+imputed_data_additional <- mice(data_table_additional_filtered, m=5) # see help(mice) for other methods
+# Source of Warning: from forums :  The two issues I know of are collinearity, and a constant predictor across all values (or maybe constant across all missing/not missing also satisfied this criteria).
+```
