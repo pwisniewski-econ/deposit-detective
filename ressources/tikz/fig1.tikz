@@ -29,17 +29,17 @@
 		\node [style=none] (31) at (13, -2.25) {};
 	\end{pgfonlayer}
 	\begin{pgfonlayer}{edgelayer}
-		\draw [style=new edge style 1] (0.center) to (1.center);
-		\draw [style=new edge style 1] (1.center) to (3.center);
-		\draw [style=new edge style 1] (3.center) to (6.center);
-		\draw (3.center) to (5.center);
-		\draw (1.center) to (4.center);
-		\draw (0.center) to (2.center);
+		\draw [style=line-blue] (0.center) to (1.center);
+		\draw [style=line-blue] (1.center) to (3.center);
+		\draw [style=line-blue] (3.center) to (6.center);
+		\draw [style=line] (3.center) to (5.center);
+		\draw [style=line] (1.center) to (4.center);
+		\draw [style=line] (0.center) to (2.center);
 		\draw [style=Dots-BlueG, in=165, out=-15] (7.center) to (10.center);
 		\draw [style=Dots-BlueG, bend left=45, looseness=2.00] (10.center) to (9.center);
 		\draw [style=Dots-BlueG] (9.center) to (8.center);
 		\draw [style=Dots-BlueG, bend left=45, looseness=2.00] (8.center) to (7.center);
-		\draw [style=new edge style 0] (20.center) to (21.center);
+		\draw [style=Arrow] (20.center) to (21.center);
 		\draw [style=Dots] (24.center) to (25.center);
 		\draw [style=Dots] (26.center) to (27.center);
 		\draw [style=Dots] (30.center) to (31.center);

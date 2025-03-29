@@ -79,31 +79,93 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 \newpage
 
-# Methodology and Identification
+# Methodology and Objectives
+
+\newpage
+
+# Weekdays
 
 ## PICO process
 
 ## DAG and Hypothesis
 
-## Econometrics and Machine Learning
+## Results 
+
+## Heterogeneity Analysis
+\newpage
+
+# Time of the month
+
+## PICO process
+
+## DAG and Hypothesis
+
+## Results
+
+## Heterogeneity Analysis
+\newpage
+
+# Macro Context
+
+This section analyzes macroeconomic determinants of the marketing campaign, focusing on the impact of interest rates on product take-up rates. The specific rate offered to consumers is unobserved; however, the product, a term deposit, is among the fastest to react to changes in market conditions. The 12-month EURIBOR rate is used as a proxy, given its strong predictive power for such products. The objective is to estimate consumer demand elasticity with respect to interest rates. This has two key implications for the offering bank: it informs the expected effect of offering a more competitive rate or supports assessment of campaign viability when pricing power is limited and rates are determined by market conditions.
+
+## PICO summary
+
+**Population**: The population of interest consists of bank consumers; however, due to previously mentioned data limitations, the analysis is restricted to clients who participated in the marketing campaign. To simplify the study design, only clients who received a single call are included.
+
+**Intervention**: Variation in market interest rates which was particularly pronounced during the 2008–2010 period is leveraged to estimate demand elasticity.
+
+**Comparison**: Clients exposed to lower market interest rates serve as a control group for those exposed to higher interest rates.
+
+**Outcome**: The primary outcome of interest is the take-up of the offered savings product, measured as a change in the take-up rate.
+
+## DAG and Hypothesis
+
+The main challenge in identifying the effect of interest rates on take-up rates is endogeneity. Specifically, interest rates represent market prices for capital and are thus the joint outcome of both supply and demand.
+
+This is problematic because interest rates are correlated with demand shocks, which directly influence take-up behavior. A clear example is the bankruptcy of Lehman Brothers, which marked the onset of the great financial crisis. This significantly altered investor risk preferences, leading to a substantial inflow of capital into safer financial instruments such as deposits or fixed term accounts.
+
+The directed acyclic graph below summarizes the primary causal relationships assumed in this section.
+
+\begin{figure}
+\centering
+\caption{Interest Rates and Take-Up}
+\vspace{0.25cm}
+\tikzfig{ressources/tikz/fig2}
+\end{figure}
+\vspace{-1cm}
+
+Under the structure outlined in the DAG, the lagged interest rate at period $t-1$ can be considered a valid instrument, provided that variables influenced by this rate are appropriately controlled for. The intuition behind this instrument is based on interest rate stickiness: financial products are often priced based on previously observed rates, while current market rates reflect present expectations rather than past ones. Therefore, contemporaneous demand shocks can be assumed to be uncorrelated with lagged interest rates.
+
+This type of instrument and identification strategy is well-established in the macroeconomic literature. However, the exogeneity of the instrument cannot be formally tested. The absence of strong alternative instruments in our dataset rule out the possibility of conducting over-identification tests such as the Sargan–J test.
+
+## Results 
+
+To estimate causal effects, three methodological approaches are employed and compared: (i) a standard two-stage least squares (2SLS) estimator applied to a linear probability model, (ii) a double machine learning (DML) estimator for a partially linear instrumental variables (IV) regression, and (iii) a probit IV regression.
 
 \newpage
 
-# Results
+TABLE HERE 
+DML and Probit are close
+2SLS very different
 
-## Weekdays
+[Discussion of 2SLS + equations]
 
-## Calendar
+[Discussion of DML + equations]
 
-## Macro Context
+[Discussion of Probit + equations]
 
-## Heterogeneity Analysis
+[Conclusion on results]
+
+
+\newpage
+
+# Conclusion 
 
 ## Discussion
 
-\newpage
+## Limitations 
 
-# Limitations and Avenues for Improvements
 
 \newpage
 
