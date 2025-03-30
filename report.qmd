@@ -49,6 +49,7 @@ library(data.table)
 library(sf)
 library(showtext)
 library(here)
+library(arrow)
 font_add(family = "Times", regular = "ressources/fonts/Times-New-Roman.otf")
 showtext_auto()
 showtext_opts(dpi = 300)
@@ -73,9 +74,121 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 \tikzfig{ressources/tikz/fig1}
 \end{figure}
 
+
+\newpage
 ## Descriptive Statistics
 
+```{r}
+count_prop <- function(DATA){
+  DATA |> summarise(`Count` = n()) |>
+  mutate(`Share (%)` = `Count`/sum(`Count`) * 100)
+}
+```
+
+
+
+```{r}
+DATA_ADD_FULL <- read_feather("results_building/bank-additional-full.feather") |>
+  mutate(outcome = if_else(y==1, "Sucess", "Failure"))
+DATA_FULL <- read_feather("results_building/bank-full.feather")
+```
+
+```{r}
+DATA_ADD_FULL |>
+  group_by(Outcome = outcome) |>
+  count_prop() |>
+  knitr::kable(digits = 2, align = "c", caption = "Observed Outcomes")
+```
+
+
+
+
+
+
+```{r, fig.cap= "Probability of sucess and number of calls", fig.height=3.5, fig.width=5.5}
+DATA_ADD_FULL |>
+  mutate(
+    `Last observed call` = if_else(campaign>8, "9+", as.character(campaign))
+  ) |>
+  group_by( `Last observed call`, outcome)|>
+  summarise(count = n()) |>
+  ggplot(aes(x=`Last observed call`, y=count, fill = outcome))+
+  geom_bar(stat="identity") +
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", fill="", y= "Number of Calls", caption = "Bank Marketing, PT, 2008-2010")+
+  guides(fill = guide_legend(override.aes = list(size = 0)))+
+  scale_fill_brewer(palette = "Blues")
+```
+
+
+```{r, fig.cap= "Number of observed last calls", fig.height=3.5, fig.width=5.5}
+DATA_ADD_FULL |>
+  group_by(date_month, outcome)|>
+  summarise(count = n()) |>
+  ggplot(aes(x=date_month, y=count, fill = outcome))+
+  geom_bar(stat="identity") +
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", fill="First Call", y= "Number of Calls", caption = "Bank Marketing, PT, 2008-2010")+
+  guides(fill = guide_legend(override.aes = list(size = 0)))+
+  scale_fill_brewer(palette = "Blues") 
+```
+
+
+
+```{r, fig.cap= "Euribor 12mo rates", fig.height=3, fig.width=5.5}
+DATA_ADD_FULL |>
+  select(date_month, euribor_12mo) |>
+  unique() |>
+  ggplot(aes(x = date_month, y=euribor_12mo))+
+  geom_line()+
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", y= "Interest Rate (%)", caption = "Euribor data, 2008-2010")
+```
+
+
+
+```{r,  fig.cap= "Euribor 12mo rates", fig.height=5, fig.width=5}
+numeric_data <- DATA_ADD_FULL |>
+  select(where(is.numeric)) |>
+  select(-c(hicp, stoxx_return, cons_confidence, euribor_12mo, nr.employed, euribor3m, cons.conf.idx, cons.price.idx, emp.var.rate, mid_week))
+
+cor_matrix <- cor(numeric_data)
+#corrplot(numeric_data_wo_na)
+ggcorrplot::ggcorrplot(cor_matrix, type = "lower")+
+  theme(text=element_text(family = "Times"))
+```
+
+
+\newpage
 ## Exploratory Analysis
+
+```{r}
+DATA_ADD_FULL |>
+  mutate(Share = if_else(y==1, "Sucess", "Failure"), day_of_week = factor(
+    day_of_week, 
+    levels = c("mon", "tue", "wed", "thu", "fri"), 
+    labels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+  )) |>
+  group_by(day_of_week, Share) |>
+  summarise(cnt = n()) |>
+  mutate(prop = cnt/sum(cnt)) |>
+  ungroup() |>
+  select(-cnt) |>
+  pivot_wider(names_from = "day_of_week", values_from = "prop") |>
+  knitr::kable(digits = 3, align = "c", caption = "Share of sucessful calls")
+```
 
 \newpage
 
@@ -85,6 +198,8 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 # Weekdays
 
+As previously mentionned, there may be evidence that a call in the middle of the week increase take-up.
+
 ## PICO process
 
 ## DAG and Hypothesis
@@ -92,6 +207,22 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 ## Results 
 
 ## Heterogeneity Analysis
+
+```{r, fig.align='center', fig.height=4, fig.width=7.25, message=FALSE, warning=FALSE, fig.cap="Change in take-up in middle of the week"}
+WEEKDAYS_results <- read_feather("results_analysis/weekdays_causal_forest.feather")
+
+WEEKDAYS_results |> 
+  filter(name!="causal-forest-all") |>
+  mutate(name = str_remove_all(name, "causal-forest-")) |>
+  ggplot(aes(x=name, y=estimate, ymin = ci_lower, ymax = ci_upper))+
+  geom_point()+
+  geom_errorbar(width=0.5)+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010")+
+  theme_minimal()+
+  theme(text = element_text(family = "Times"))+
+  geom_hline(yintercept = 0, linetype="dotted")
+```
+
 \newpage
 
 # Time of the month
@@ -103,6 +234,22 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 ## Results
 
 ## Heterogeneity Analysis
+
+```{r, fig.align='center', fig.height=4, fig.width=7.25, message=FALSE, warning=FALSE, fig.cap="Change in take-up at the end of the month"}
+EOM_results <- read_feather("results_analysis/eom_causal_forest.feather")
+
+EOM_results |> 
+  filter(name!="causal-forest-all") |>
+  mutate(name = str_remove_all(name, "causal-forest-")) |>
+  ggplot(aes(x=name, y=estimate, ymin = ci_lower, ymax = ci_upper))+
+  geom_point()+
+  geom_errorbar(width=0.5)+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010")+
+  theme_minimal()+
+  theme(text = element_text(family = "Times"))+
+  geom_hline(yintercept = 0, linetype="dotted")
+```
+
 \newpage
 
 # Macro Context
@@ -141,9 +288,37 @@ This type of instrument and identification strategy is well-established in the m
 
 ## Results 
 
+```{r}
+
+LAG_EURIBOR <- DATA_ADD_FULL |> 
+  select(date_month, euribor_12mo) |> 
+  unique() |> 
+  mutate(euribor_12mo_l1 = lag(euribor_12mo))
+
+REG_DATA <- DATA_ADD_FULL |> 
+  left_join(LAG_EURIBOR, by= c("date_month", "euribor_12mo")) |>
+  mutate(across(c(poutcome, marital, job, housing, default, education), ~as.factor(.x))) |> 
+  filter(!is.na(euribor_12mo_l1)&campaign==1)
+
+```
+
+
 To estimate causal effects, three methodological approaches are employed and compared: (i) a standard two-stage least squares (2SLS) estimator applied to a linear probability model, (ii) a double machine learning (DML) estimator for a partially linear instrumental variables (IV) regression, and (iii) a probit IV regression.
 
 \newpage
+
+```{r}
+RESULTS_MACRO <- read_feather("results_analysis/results_macro.feather")
+RESULTS_MACRO |> 
+  rename(Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `Compute (s)` = compute)|> 
+  mutate(name = str_remove_all(name, "IR-")) |>
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(digits = 4, align = "c", caption = "Results from IV estimation")
+
+```
+
 
 TABLE HERE 
 DML and Probit are close
@@ -178,10 +353,40 @@ DML and Probit are close
 
 # Appendix
 
+## Detailed statistics 
+
+```{r}
+DATA_ADD_FULL |>
+  group_by(`Marital Status` = marital) |>
+  count_prop() |>
+  knitr::kable(digits = 2, align = "c", caption = "Observed marital status")
+```
+
+```{r}
+DATA_ADD_FULL |>
+  group_by(`Marital Status` = marital) |>
+  count_prop() |>
+  knitr::kable(digits = 2, align = "c", caption = "Observed marital status")
+```
+
+```{r}
+DATA_ADD_FULL |>
+  group_by(`Education` = education) |>
+  count_prop() |>
+  knitr::kable(digits = 2, align = "c", caption = "Observed Job titles")
+```
+
+```{r}
+DATA_ADD_FULL |>
+  group_by(`Job Titles` = job) |>
+  count_prop() |>
+  knitr::kable(digits = 2, align = "c", caption = "Observed education")
+```
+
+
 ## Robustness
 
 ## Robustness 
 
 ## Robustness
-
 
