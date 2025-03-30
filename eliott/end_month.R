@@ -15,9 +15,11 @@ library(AIPW)
 library(SuperLearner)
 library(margins)
 library(emmeans)
+library(lubridate)
+
 
 # importing data
-dataset = read_feather("results_building/bank-additional-full.feather")
+dataset = read_feather("results_building/bank-full.feather")
 
 ################################################ Preparing the data
 
@@ -28,13 +30,13 @@ dataset <- dataset %>%
            default != "unknown" &
            job != "unknown" &
            marital != "unknown" &
-           education != "unknown" &
+           education != "unknown" & 
            poutcome != "unknown" &
-         contact != "unknown"
+          contact != "unknown"
   )
 
 # removing some variables added by us
-dataset <- dataset[, !names(dataset) %in% c("euribor_12mo", "hicp", "cons_confidence", "unemployment", "stoxx_return")]
+# dataset <- dataset[, !names(dataset) %in% c("euribor_12mo", "hicp", "cons_confidence", "unemployment", "stoxx_return")]
 
 # removing post-treatment variables
 dataset <- subset(dataset, select = -duration)
@@ -73,8 +75,20 @@ dataset <- subset(dataset, select = -campaign)
 dataset$date_month = as.factor(dataset$date_month) 
 
 # generate treatment
-dataset$treatment <- ifelse(dataset$day_of_week  %in% c("tue", "wed", "thu"), 1, 0)
-dataset <- subset(dataset, select = -day_of_week)
+
+dataset <- dataset %>%
+  mutate(
+    # Convert date_month to a proper Date object if not already
+    date_month = as.Date(date_month),
+    
+    # Get number of days in the month
+    end_day_month = days_in_month(date_month),
+    
+    # Create treatment variable: 1 if it's the last day of the month, else 0
+    treatment = if_else(day > 16, 1, 0)
+  )
+
+dataset <- subset(dataset, select = -end_day_month)
 
 # binary outcome
 dataset$outcome <- ifelse(dataset$y == "yes", 1, 0)
@@ -108,7 +122,7 @@ print(table1, smd = TRUE)
 
 # strategy: incorporate month fixed effects (as dummies) and remove all macro variables
 # to prevent instabability of coefficients due to correlation
-data_logit <- subset(dataset, select = - c(euribor3m, emp.var.rate, cons.price.idx, cons.conf.idx, nr.employed))
+data_logit <- dataset #subset(dataset, select = - c(euribor3m, emp.var.rate, cons.price.idx, cons.conf.idx, nr.employed))
 str(data_logit)
 
 # Run logistic regression
