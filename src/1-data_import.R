@@ -92,6 +92,7 @@ main_import <- function(filename, supplementary_ls, add=F){
   DATA <- DATA |>
   left_join(MONTH2NUM, by = "month") |>
     mutate(
+      y = if_else(y=="yes", 1, 0),
       new_year = if_else(month_num < lag(month_num), 1, 0, missing = 0),
       year = 2008 + cumsum(new_year), 
       date_month = as.Date(paste0(
@@ -109,8 +110,19 @@ main_import <- function(filename, supplementary_ls, add=F){
 
 }
 
-DATA_FULL <- main_import("bank-full.csv", supplementary_ls)
-DATA_ADD_FULL <- main_import("bank-additional-full.csv", supplementary_ls, add=T)
+DATA_FULL <- main_import("bank-full.csv", supplementary_ls) |>
+  mutate(end_month = if_else(day>16, 1, 0))
+
+DATA_ADD_FULL <- main_import("bank-additional-full.csv", supplementary_ls, add=T) |>
+  mutate(
+    mid_week = if_else(day_of_week%in%c("mon", "fri"), 0, 1), 
+    pdays = case_when(
+      pdays == 999 ~ "nc",
+      pdays < 7 ~ "<7",
+      pdays > 6 ~ "7+",
+      TRUE ~ NA_character_
+    )
+  )
 
 # Export ----
 feather_export(DATA_FULL, "bank-full.feather")
