@@ -107,8 +107,7 @@ dataset <- subset(dataset, select = -propensity_score)
 prop.table(table(dataset$outcome))
 
 # Weights to mitigate imbalance in outcome 
-weights <- ifelse(dataset$outcome == "Yes", 0.85/0.15, 1)
-
+weights <- ifelse(dataset$outcome == "Yes", 3.72, 1)
 
 ### LOGIT
 
@@ -122,7 +121,10 @@ X_numeric = data.frame(X_numeric)
 data_numeric = X_numeric
 data_numeric$outcome = dataset$outcome
 
-logit_model <- glm(outcome ~ treatment + .,
+logit_model <- glm(outcome ~ treatment + .
+                   - euribor3m
+                   - emp.var.rate - cons.price.idx - cons.conf.idx - nr.employed
+                   ,
                    data = data_numeric, family = binomial, weights = weights)
 
 # Print summary of the model
@@ -151,15 +153,140 @@ ggplot() +
   theme_minimal()
 
 
-# Generate ROC object
-roc_obj <- roc(dataset$outcome, pred_logit)
 
-# Plot the ROC Curve
-plot(roc_obj)
+#################### NESTED CROSS VALIDATION #######################################
 
-# Find the optimal threshold (Youden's Index)
-optimal_threshold <- coords(roc_obj, "best", ret = "threshold")
-print(optimal_threshold)
+
+y <- data_numeric$outcome
+x_matrix = X_numeric
+
+# Define cross-validation folds
+outer_folds <- createFolds(y, k = 5, list = TRUE, returnTrain = TRUE)
+
+
+# Storing results
+results <- data.frame(Fold = integer(), AUC = double(), Best_Threshold = double(), Accuracy = double(), F1_Score = double())
+best_models <- list()
+inner_results <- data.frame(Fold = integer(), Weight = double(), Threshold = double(), Mean_AUC = double())
+
+for (i in 1:length(outer_folds)) {
+  
+  # Outer training and testing data
+  train_index <- outer_folds[[i]]
+  x_train <- x_matrix[train_index, ]
+  y_train <- y[train_index]
+  x_test <- x_matrix[-train_index, ]
+  y_test <- y[-train_index]
+  
+  # Inner Cross-Validation Setup
+  inner_folds <- createFolds(y_train, k = 5, list = TRUE)  # Inner 5-fold CV
+  
+  weight_grid <- seq(1, 10, by = 0.5)  # Weights to test
+  threshold_grid <- seq(0.1, 0.9, by = 0.05)  # Thresholds to test
+  best_auc <- 0
+  best_model <- NULL
+  best_weight <- 1
+  best_threshold <- 0.5
+  
+  # Randomized Search CV
+  search_iterations <- 30  # Number of random combinations to test
+  
+  for (k in 1:search_iterations) {
+    
+    # Randomly sample a weight and threshold combination
+    weight <- sample(weight_grid, 1)
+    threshold <- sample(threshold_grid, 1)
+    auc_values <- c()  
+    
+    # Inner Cross-Validation Loop
+    for (j in 1:length(inner_folds)) {
+      inner_train_index <- inner_folds[[j]]
+      
+      # Shuffle the inner training data before each fold
+      shuffle_index <- sample(seq_len(length(inner_train_index)))
+      inner_train_index <- inner_train_index[shuffle_index]
+      
+      x_inner_train <- x_train[inner_train_index, ]
+      y_inner_train <- y_train[inner_train_index]
+      x_inner_test <- x_train[-inner_train_index, ]
+      y_inner_test <- y_train[-inner_train_index]
+      
+      # Define weights (higher for positive class to handle imbalance)
+      weights <- ifelse(y_inner_train == 1, weight, 1)
+      
+      # Fit logistic regression model
+      cv_model <- glm(y_inner_train ~ ., family = binomial, weights = weights, data = as.data.frame(x_inner_train))
+      
+      # Make predictions
+      predicted_probs_inner <- predict(cv_model, newdata = as.data.frame(x_inner_test), type = "response")
+      auc_value_inner <- auc(y_inner_test, predicted_probs_inner)
+      auc_values <- c(auc_values, auc_value_inner)
+    }
+    
+    # Average AUC over inner folds
+    mean_auc <- mean(auc_values)
+    
+    # Save inner results for plotting
+    inner_results <- rbind(inner_results, data.frame(
+      Fold = i,
+      Weight = weight,
+      Threshold = threshold,
+      Mean_AUC = mean_auc
+    ))
+    
+    # Update best model if average AUC improves
+    if (mean_auc > best_auc) {
+      best_auc <- mean_auc
+      best_model <- cv_model
+      best_weight <- weight
+      best_threshold <- threshold
+    }
+  }
+  
+  # Test the best model on outer test set
+  predicted_probs <- predict(best_model, newdata = as.data.frame(x_test), type = "response")
+  predicted_class <- ifelse(predicted_probs > best_threshold, 1, 0)
+  
+  # Confusion Matrix
+  confusion <- table(Predicted = predicted_class, Actual = y_test)
+  precision <- confusion[2, 2] / sum(confusion[2, ])
+  recall <- confusion[2, 2] / sum(confusion[, 2])
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  
+  if (is.na(f1_score)) f1_score <- 0
+  
+  # Store results
+  results <- rbind(results, data.frame(
+    Fold = i,
+    AUC = best_auc,
+    Best_Threshold = best_threshold,
+    Accuracy = sum(predicted_class == y_test) / length(y_test),
+    F1_Score = f1_score
+  ))
+  
+  best_models[[i]] <- list(model = best_model, weight = best_weight, threshold = best_threshold)
+}
+
+# Display results
+print(results)
+
+# Display average performance across folds
+average_results <- colMeans(results[, -1])
+print(average_results)
+
+# Plot the 5 best combinations from inner loop
+inner_results_top10 <- inner_results[order(-inner_results$Mean_AUC), ][1:100, ]
+
+inner_plot <- ggplot(inner_results_top10, aes(x = Mean_AUC, y = paste0("(", Weight, ", ", Threshold, ")"))) +
+  geom_point(color = 'red', size = 3) +
+  labs(title = "Top 5 Best AUC Combinations from Inner Loop",
+       x = "Mean AUC",
+       y = "(Weight, Threshold)") +
+  theme_minimal()
+
+print(inner_plot)
+
+
 
 ####################################################
 
@@ -236,6 +363,9 @@ roc_unweighted <- roc(dataset$outcome, predicted_probs_unweighted)
 plot(roc_weighted, col = "blue", main = "ROC Curves: Weighted vs. Unweighted Models", legacy.axes = TRUE)
 plot(roc_unweighted, col = "red", add = TRUE)
 legend("bottomright", legend = c("Weighted Model", "Unweighted Model"), col = c("blue", "red"), lty = 1)
+
+
+
 
 
 
@@ -319,12 +449,14 @@ summary(post_lasso_matched_model)
 library(smotefamily)
 library(ROSE)
 
-
 # Run logistic regression
 # we put date_month as factor to act as month fixed effects, thereby capturing
 # economic recovery, and any effect related to the current state of the world in 
 # Portugal at the time of the call
-logit_model <- glm(outcome ~ treatment + . + factor(date_month) - date_month,
+logit_model <- glm(outcome ~ treatment + . + factor(date_month) - date_month
+                   - euribor3m
+                   - emp.var.rate - cons.price.idx - cons.conf.idx - nr.employed
+                   ,
                    data = dataset, family = binomial, weights = weights)
 
 # Print summary of the model
