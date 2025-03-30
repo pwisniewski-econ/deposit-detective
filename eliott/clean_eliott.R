@@ -10,7 +10,9 @@ library(hdm)
 library(Matching)
 library(pROC)
 library(caret)  # For confusionMatrix function
-
+library(tableone)
+library(AIPW)
+library(SuperLearner)
 
 # importing data
 dataset = read_feather("results_building/bank-additional-full.feather")
@@ -85,8 +87,6 @@ prop.table(table(dataset$outcome))
 weights <- ifelse(dataset$outcome == "Yes", 3.72, 1)
 
 # Covariate Balance Table: checking
-library(tableone)
-
 covariates = colnames(dataset)[colnames(dataset) != "treatment"]
 covariates = covariates[covariates != "outcome"]
 
@@ -174,11 +174,73 @@ ggplot(me_df, aes(x = reorder(job, AME), y = AME)) +
   theme_minimal(base_size = 13)
 
 
+
+
+
+
+##################################################### Boostrap Logit
+
+
+set.seed(123)
+
+# Number of bootstrap samples
+B <- 10
+boot_coefs <- numeric(B)
+
+n <- nrow(data_logit)  # your dataframe
+boot_ames <- numeric(0)
+
+
+for (i in 1:B) {
+  index <- sample(1:n, replace = TRUE)
+  boot_data <- data_logit[index, ]
+  
+  # Check that treatment has at least two levels
+  if (length(unique(boot_data$treatment)) < 2) {
+    next  # skip this iteration
+  }
+  
+  # Try to fit the model and catch errors (e.g., separation)
+  boot_model <- tryCatch({
+    glm(outcome ~ treatment + ., data = boot_data, family = binomial())
+  }, error = function(e) NULL)
+  
+  # If model failed, skip
+  if (!is.null(boot_model)) {
+    coef_treat <- tryCatch({
+      coef(boot_model)["treatment"]
+    }, error = function(e) NA)
+    
+    if (!is.na(coef_treat)) {
+      boot_coefs <- c(boot_coefs, coef_treat)
+    }
+  }
+  if (!is.null(boot_model)) {
+    ame <- tryCatch({
+      summary(margins(boot_model))[which(summary(margins(boot_model))$factor == "treatment"), "AME"]
+    }, error = function(e) NA)
+    
+    if (!is.na(ame)) {
+      boot_ames <- c(boot_ames, ame)
+    }
+  }
+}
+
+# Compute bootstrap mean, SE, and 95% CI
+boot_mean <- mean(boot_coefs)
+boot_se <- sd(boot_coefs)
+boot_ci <- quantile(boot_coefs, probs = c(0.025, 0.975))
+
+# Summary of bootstrap marginal effects
+mean_ame <- mean(boot_ames)
+se_ame <- sd(boot_ames)
+ci_ame <- quantile(boot_ames, c(0.025, 0.975))
+
 ###################################################### IPW
 prop.table(table(dataset$outcome))
 
 # 
-data_ipw = dataset
+data_ipw = data_logit
 data_ipw$date_month <- as.factor(data_ipw$date_month)
 str(data_ipw)
 
@@ -235,17 +297,19 @@ summary(model_svy)
 
 ####### AIPW
 str(data_logit)
-data_ipw <- subset(data_logit, select = -ipw)
 
 data_ipw = data_logit
 W = subset(data_logit, select = -c(outcome, treatment))
+X_numeric <- model.matrix( ~ . - 1, data = W)  # "-1" removes the intercept column
+str(X_numeric)
+
 
 #create an object
 aipw_sl <- AIPW$new(Y=data_logit$outcome, 
                     A=data_logit$treatment,
-                    W=W,
-                    Q.SL.library = c("SL.mean"),
-                    g.SL.library = c("SL.mean"),
+                    W=X_numeric,
+                    Q.SL.library = c("SL.glm", "SL.mean"),
+                    g.SL.library = c("SL.glm", "SL.mean"),
                     k_split=10,verbose=TRUE)
 #fit the object
 aipw_sl$stratified_fit()
@@ -253,15 +317,96 @@ aipw_sl$stratified_fit()
 aipw_sl$summary(g.bound = 0.025)
 #check the propensity scores by exposure status after truncation
 aipw_sl$plot.p_score()
-aipw_sl$ip_weights.plot
-print(aipw_sl$result, digits = 2)
+print(aipw_sl$result, digits = 5)
+
+# recompute LOGIT coefficient
+# Values from your output
+p0 <- aipw_sl$result["Risk of control", "Estimate"]  # Risk under control
+att_rd <- aipw_sl$result["ATT Risk Difference", "Estimate"]
+p1 <- p0 + att_rd
+
+# Compute odds
+odds0 <- p0 / (1 - p0)
+odds1 <- p1 / (1 - p1)
+
+# Compute odds ratio and logit coefficient
+or <- odds1 / odds0
+logit_coef <- log(or)
+
+# Output
+cat("Implied OR:", round(or, 4), "\n")
+cat("Implied Logit Coefficient (log OR):", round(logit_coef, 4), "\n")
 
 
+## plot 
+# From logistic regression
+logit_est <- coef(logit_model)["treatment"]
+logit_se <- summary(logit_model)$coefficients["treatment", "Std. Error"]
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
 
-### ROBUSTNESS
+# From AIPW - let's say you’re comparing log OR
+# Use your actual values here
+aipw_log_or <- log(aipw_sl$result["Odds Ratio", "Estimate"])  # OR from AIPW output
+aipw_se <- aipw_sl$result["Odds Ratio", "SE"] / aipw_sl$result["Odds Ratio", "Estimate"]  # Delta method: SE(log OR) ≈ SE(OR) / OR
+aipw_lower <- aipw_log_or - 1.96 * aipw_se
+aipw_upper <- aipw_log_or + 1.96 * aipw_se
+
+# Create comparison data frame
+df <- tibble(
+  method = c("Logit", "AIPW"),
+  estimate = c(logit_est, aipw_log_or),
+  lower = c(logit_lower, aipw_lower),
+  upper = c(logit_upper, aipw_upper)
+)
+
+# Plot
+ggplot(df, aes(x = method, y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15) +
+  labs(title = "Treatment Effect (log OR): Logit vs AIPW",
+       y = "Log Odds Ratio", x = "") +
+  theme_minimal()
+
+## Marginal effects
+# 1. Extract marginal effect for "treatment" from logit model
+logit_marginal <- ame_summary[ame_summary$factor == "treatment", ]
+logit_est <- logit_marginal$AME
+logit_se <- logit_marginal$SE
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
+
+# 2. Extract AIPW Risk Difference (ATE) from your object
+aipw_result <- aipw_sl$result
+aipw_rd_row <- aipw_result["Risk Difference", ]
+aipw_est <- aipw_rd_row["Estimate"]
+aipw_se <- aipw_rd_row["SE"]
+aipw_lower <- aipw_est - 1.96 * aipw_se
+aipw_upper <- aipw_est + 1.96 * aipw_se
+
+# 3. Combine into a tidy data frame
+df_plot <- tibble(
+  Method = c("Logit AME", "AIPW Risk Difference"),
+  Estimate = c(logit_est, aipw_est),
+  Lower = c(logit_lower, aipw_lower),
+  Upper = c(logit_upper, aipw_upper)
+)
+
+# 4. Plot
+ggplot(df_plot, aes(x = Method, y = Estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.15) +
+  labs(title = "Average Treatment Effect",
+       y = "ATE (Probability Scale)", x = "") +
+  theme_minimal()
+
+
+### ##################################################
+#ROBUSTNESS
+##################################################
+
 library(smotefamily)
 library(ROSE)
-
 
 ###################################################### Logit without month fixed effects but with macro 
 
