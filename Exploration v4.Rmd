@@ -1,0 +1,911 @@
+---
+title: "Data analysis: Marketing Campaign Impact on Term Deposit Subscriptions - A Comparative Analysis of Causal Inference Methods"
+output: html_document
+date: "2025-03-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Description of Problem
+
+This project leverages a Marketing Dataset from a Portuguese banking institution to identify factors that influence a customer's likelihood of subscribing to term deposits during a marketing campaign. Additionally, it evaluates the impact of direct calls on subscription rates. This project aims to compare the traditional ML causal inference methods, such as matching, with modern ML-based approaches like Double ML.
+
+## Overview of data
+The data is related with direct marketing campaigns of a Portuguese banking institution. The marketing campaigns were based on phone calls. Often, more than one contact to the same client was required, in order to access if the product (bank term deposit) would be ('yes') or not ('no') subscribed. The product in question (i.e., the bank term deposit) is a savings account that allows you to have interest in return for the unavailability of the money that's put in for a certain period of time.
+
+This dataset is based on "Bank Marketing" UCI dataset (link: http://archive.ics.uci.edu/ml/datasets/Bank+Marketing). Additionally, it is enriched with five new social and economic features/attributes (nation-wide indicators from a ~10M population country), published by the Banco de Portugal and publicly available at: https://www.bportugal.pt/estatisticasweb. The reason the authors enriched the dataset with these socio-economic variables is because they found the addition lead to substantial improvement in the prediction of a success, even when the duration of the call is not included.
+
+The data is ordered by date (from May 2008 to November 2010). Additionally, for testing the performance of computationally intensive models, the file bank-additional.csv with 10% of the examples (4119), randomly selected from bank-additional-full.csv is provided.
+
+Additionally, we know from the outset that this database is trimmed for all the attempted outbound calls made which did not get answered i.e., all the people that were contacted unexpectedly who did not pick up over the course of the entire marketing campaign. Furthermore, we know from the paper that there were two types of calls - outbound and inbound calls - where the former is the situation where the bank does pure cold-calling and covers the entire database of potential contacts without selection (i.e., hence why the paper was exploring whether to do a predictive algorithm to improve efficiency of the cold-calling process through better targeting) and the latter which is the situation where an individual calls the bank for another reason and is also marketed this product.
+
+## Variables for bank additional dataset
+This is supposedly the cleaner dataset but has some variables omitted from the original bank dataset and the addition of the MACRO variables (which was explained in the paper to have signicantly improved the predictive performance of the ML algorithms).
+
+### Variables related to bank client data:
+
+  * age (numeric)
+  * job : type of job (categorical: "admin.","blue-collar","entrepreneur","housemaid","management","retired","self-employed","services","student","technician","unemployed","unknown")
+  * marital : marital status (categorical: "divorced","married","single","unknown"; note: "divorced" means divorced or widowed)
+  *education (categorical: "basic.4y","basic.6y","basic.9y","high.school","illiterate","professional.course","university.degree","unknown")
+  * default: has credit in default? (categorical: "no","yes","unknown")
+  * housing: has housing loan? (categorical: "no","yes","unknown")
+  * loan: has personal loan? (categorical: "no","yes","unknown")
+
+### Variables related to the previous attempts at being contacted:
+
+  * contact: contact communication type (categorical: "cellular","telephone") 
+  * month: last contact month of year (categorical: "jan", "feb", "mar", ..., "nov", "dec")
+  * day_of_week: last contact day of the week (categorical: "mon","tue","wed","thu","fri")
+  * duration: last contact duration, in seconds (numeric). Important note:  this attribute highly affects the output target (e.g., if duration=0 then y="no"). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.
+  * campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+  * pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric; 999 means client was not previously contacted)
+  * previous: number of contacts performed before this campaign and for this client (numeric)
+  * poutcome: outcome of the previous marketing campaign (categorical: "failure","nonexistent","success")
+
+### Variables related to the state of the economy 
+
+  * emp.var.rate: employment variation rate - quarterly indicator (numeric)
+  * cons.price.idx: consumer price index - monthly indicator (numeric)     
+  * cons.conf.idx: consumer confidence index - monthly indicator (numeric)     
+  * euribor3m: euribor 3 month rate - daily indicator (numeric)
+  * nr.employed: number of employees - quarterly indicator (numeric)
+
+### Outcome variable:
+  * y - has the client subscribed a term deposit? (binary: "yes","no")
+
+## Missing values (for both datasets):
+There are several missing values in several variables, all coded with the "unknown" label. 
+
+## Variables for bank dataset
+This dataset does not contain any macro-related variables as well as the day of the week variable (i.e., on what day of the working week did the call take place). However, it does include the following variables which are not included in the final clean dataset (i.e., bank additional full):
+
+ * balance - average yearly balance, in euros (numeric) 
+ * day: last contact day of the month (numeric)
+
+## PICO formulation:
+
+  * Population : Who are we interested in? - Portuguese potential customers being contacted or contacting the bank
+  * Intervention : What treatment/intervention do we study? - Marketing campaign aspects (*Note: there are different aspects we will explore*)
+  1) the call taking place in the middle of the working week ("business mindset") vs the rest of the week ("leisure or work catchup" mindset) 
+  2) the call taking place at the end of the month vs the rest of the month or the beginning of the month vs the rest of the month (i.e., because people tend to have higher account balances at the beginning of the month relative to the end)
+  * Control : What are we comparing it to/who is our control group:
+  Population with different characteristics e.g., different economic context, different job, different number of calls prior to current call etc.
+  * Outcome : What are we interested in? - Likelihood of subscribing to the term deposit product
+  * Time : Outcome is determined after call ends (i.e., directly after treatment)
+  
+```{r packages}
+# Loading packages:
+library(data.table)
+library(dplyr)
+library(corrplot) # for correlation plot
+library(GGally) # for plotting
+library(DiagrammeR) # for DAG
+library(DoubleML) # for double debiased ML
+library(mlr3)
+#install.packages("arrow")
+library(arrow) # for opening up .feather files
+# Install packages if they are not already installed
+# install.packages(c("mice", "ggplot2", "naniar"))
+library(mice) # for MICE imputation
+library(ggplot2)  # for MICE imputation
+library(naniar) # for MICE imputation
+# stacking libraries imported below
+library(mlr3)
+library(mlr3learners)
+library(mlr3tuning)
+library(mlr3) # for stacking
+library(mlr3pipelines) # for stacking
+library(paradox)
+#install.packages("paradox")
+```  
+
+```{r loading data + high-level exploration}
+# Packages:
+# data <- read.csv("bank-additional-full.csv", sep = ";")
+data_table <- fread("bank-additional-full.csv", sep = ";")
+data_table_unclean <- fread("bank-full.csv", sep = ";")
+
+# classifying variables other than the outcome
+categorical_variable_names  <- c("job", "marital", "education", "default", "housing",
+                                 "housing", "loan", "contact", "month", "day_of_week",
+                                 "poutcome")
+numerical_variable_names <- c("age", "duration", "campaign", "pdays", "previous",
+                              "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed",
+                              "emp.var.rate")
+
+summary(data_table)
+
+head(data_table)
+```
+
+## Outcome variable:
+```{r outcome variable exploration}
+# looking at the outcome
+print("outcome - y")
+table(data_table$y) # imbalanced in favour of "no", this imbalance further makes sense 
+#               when considering each row is an attempt and not an individual
+```
+
+Looking at the outcome, there is an imbalance in favour of "no", which makes sense independently of the structure of the dataset given we would expect that most people contacted would not subscribe to the product. Considering the structure of the dataset, this imbalance makes further sense when considering each row is an attempt and not an individual, so even if an individual eventually agrees to subscribe, we would consider all the previous unsuccessful attempts.
+
+## Categorical variables:
+```{r categorical variable exploration}
+# looking at categorical variables
+print("job")
+table(data_table$job)
+print("marital status")
+table(data_table$marital)
+print("level of education")
+table(data_table$education)
+print("currently has credit in default?")
+table(data_table$default) # Variable: currently has credit in default
+print("currently has a housing loan?")
+table(data_table$housing) # Variable: currently has a housing loan
+print("currently has a personal loan?")
+table(data_table$loan)
+print("medium of contact")
+table(data_table$contact)
+print("month contacted")
+table(data_table$month) # By far most contacts done in May, and very few in December
+print("day of the week contacted")
+table(data_table$day_of_week) # equally split between work days of the week
+print("outcome of last marketing campaign")
+table(data_table$poutcome) # Variable: previous outcome of the last marketing campaign - most potential customers haven't been involved in previous campaigns (see previous)
+```
+
+Looking at the categorical variables, a striking feature is that the successful contacts are spread out equally between the work days of the week, which is likely a supply-side feature more than a demand-side one (i.e., it is more likely that the firm's employees work equally throughout the week. Another interesting feature is that by far, most successful contacts were carried out in May, which may be a demand-side pressure (i.e., are customers more likely to answer shortly before the summer period to anticipate large spends during the summer?), and then there are very few contacts carried out in December, likely due to the holidays. Additionally, using the poutcome variable, we can see that most of the potential customers successfully contacted are those who have not been involved in previous campaigns, which makes sense, as they are likely to have more success with contacts with customers who have not been contacted before than those who have and have declined to subscribe. 
+
+## Numerical variables:
+```{r numerical variable exploration}
+# looking at numerical variables
+print("age")
+summary(data_table$age) # 17-98 years old potential customers
+print("contact duration in seconds")
+summary(data_table$duration) # last contact duration in seconds 102-4918 seconds, on average 258 seconds (~4 mins)
+print("number of previous contacts in current campaign")
+summary(data_table$campaign) # number of previous contacts in CURRENT CAMPAIGN, 1-56 times, on average contacted 2.6 times
+print("number of days passed since last contact")
+summary(data_table$pdays) # number of days since last contact, 0-999 days, on average contacted 962.5 days
+# mode (top 3 most frequent) - 999 is by far most frequent
+print("3 most frequent values of this variable")
+names(sort(-table(data_table$pdays)))[1:3] 
+print("number of previous contacts in previous campaign")
+summary(data_table$previous) # number of previous contacts in PREVIOUS CAMPAIGN, 0-7 times, on average contacted 0.173 times
+print("consumer price index")
+summary(data_table$cons.price.idx) # 
+print("consumer confidence index")
+summary(data_table$cons.conf.idx) # 
+print("Euribor 3m")
+summary(data_table$euribor3m) # 
+print("Number of employed quarterly")
+summary(data_table$nr.employed) # 
+print("Employment variation rate")
+summary(data_table$emp.var.rate)
+```
+
+```{r plots, echo=FALSE}
+# looking at numerical variables
+hist(data_table$age, xlim = c(0,100), ylim = c(0, 0.05), freq = FALSE, main = "Histogram of age", 
+     xlab = "age") #slight positive skew
+hist(data_table$duration, ylim = c(0, 0.002), freq = FALSE, main = "Histogram of phone call duration",
+     xlab = "phone call duration") # very positive skew - most phone calls are short, makes sense
+#                                                             (most individuals contacted may not want to stay on the call that long)
+hist(data_table$campaign, freq = FALSE, ylim = c(0, 0.2), main = "Histogram of number of contacts during current campaign",
+     xlab = "number of contacts during current campaign") # very positive skew - most potential customers are contacted very few times previously - makes sense
+#                                         (customers may ask not to be contacted again)
+hist(data_table$pdays, freq = FALSE, main = "Histogram of days since last contact",
+     xlab = "days since last contact") # very discrete distribution - in reality almost all people are contacted 999 days
+#                                         (encoding which signifies people were not contacted in the previous campaign)
+hist(data_table$previous, freq = FALSE, main = "Histogram of number of contacts in previous campaigns",
+     xlab = "number of contacts in previous campaigns", ylim = c(0, 2)) # very positive skew - most potential customers are contacted very few times in campaigns before - makes sense
+#                                         (focusing on a new pool of potential customers in new campaign to increase p. of getting a positive result - see poutcome)
+
+hist(data_table$cons.price.idx, freq = FALSE, main = "Histogram of consumer price index", xlab = "consumer price index", ylim = c(0,2)) # 
+hist(data_table$cons.conf.idx, freq = FALSE, main = "Histogram of consumer confidence index", xlab = "consumer confidence index", ylim = c(0,2)) # 
+hist(data_table$euribor3m, freq = FALSE, main = "Histogram of Euribor 3m", xlab = "Euribor 3m") # 
+hist(data_table$nr.employed, freq = FALSE, main = "Histogram of number of employed quarterly",
+     xlab = "number of employed quarterly") # 
+hist(data_table$emp.var.rate, freq = FALSE, main = "Histogram of quarterly variation in employment",
+     xlab = "quarterly variation in employment") # 
+```
+
+Looking at the numerical variables, we see for instance, that successfully contacted potential customers are aged 17-98, with a positive skew i.e., most individuals contacted are working-age individuals. Additionally, there are quite a lot of positively skewed variables in the variables related to campaign statistics. For example, last contact duration, number of previous contacts in the current campaign, the number of days since the last contact, and the number of previous contacts in previous campaigns. This makes sense given that most individuals won't want to be called at all, may ask not to be contacted again or will not pick up again, and won't want to spend much time on the phone for a marketing. Furthermore, we can see that this campaign has mostly managed to access a new pool of potential customers in and this is likely due to previously contacted customers being less susceptible to change their mind if previously contacted.  Interestingly, the number of days since last contact variable is very discrete, the vast majority of individuals were contacted 999 days after the last contact, however, this is an encoding for the fact that people were not contacted in the previous campaign, and will need to be recoded.
+
+Additionally, we can see that on average, for those who pick up people spend around 4 mins on the marketing call.
+
+In terms of the economy-related variables corresponding to Portugal, it seems potential customers are mostly successfully contacted:
+
+  * in deflationary periods
+  * in periods of low consumer confidence
+  * Euribor3m is high - i.e., when return of savings account is likely to be high
+  * when employment is decreasing to very low growth
+  
+So overall, it seems that customers tend to be successfully contacted when future expectations of the future economy are low, and so may want to plan ahead financially and consequently, be more open to getting the product proposed.
+
+## Simple success rate over campaign factors
+```{r success rate by factor, echo=FALSE}
+# over the days of the week
+data_table_day_of_week <- data_table %>%
+  mutate(y= ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) %>%
+  group_by(day_of_week) %>%
+  summarise(success = mean(y, na.rm = TRUE))
+print(data_table_day_of_week)
+
+data_table_month <- data_table %>%
+  mutate(y= ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) %>%
+  group_by(month) %>%
+  summarise(success = mean(y, na.rm = TRUE))
+print(data_table_month)
+```
+There seems to be a lot of variation between months but this could be due to the bulk of the data being from pre-2008 financial crisis and so this may be more the MACRO aspect of moment relative to the crisis more than general seasonality.
+
+## Correlation plot of numerical variables
+```{r corplots, echo=FALSE}
+# correlation plot
+numeric_data <- data_table[, lapply(.SD, as.numeric), .SDcols = numerical_variable_names]
+
+numeric_data_wo_na <- na.omit(numeric_data)
+# Compute the correlation matrix
+cor_matrix <- cor(numeric_data_wo_na)
+cor_matrix
+#corrplot(numeric_data_wo_na)
+ggcorr(numeric_data_wo_na, hjust = 0.75, size = 5, color = "grey50", layout.exp = 1)
+```
+
+Here, we will mostly explore the relationship between the marketing campaign variables and other variables (i.e., not focusing on the relationship between MACRO variables) where there are not very strong correlations. For example, we see that previous and pdays are negatively correlated. As a reminder, previous is the number of contacts performed in the last campaign and pdays is the number of days since the last contact. It makes sense that the more contacts there have been, the fewer the days there tends to be since the last contact. 
+
+Finally, there seems to be a negative correlation between previous (i.e., number of contacts in the previous campaign) and Euribor 3m and number of individuals in the quarter (both markers of growth). This could be due to business cycle fluctuations - it may be that if there were high levels of growth in the current campaign, that there may have been low levels of growth in the previous campaign, therefore the telemarketers were calling people less due to reduced optimism in the previous campaign or that people were more often asked not to be called again due to a savings product being less pertinent given the state of the economy. 
+## Considerations for next steps
+
+After data exploration, we have seen that in the original dataset (i.e., bank full), we have a strong suspicion of duplicate values, as seen as rows of very unlikely combinations with a different number of campaign values (i.e., total number of succesful contacts) which suggests there were several rows that correspond to the same individual over time. However, we assume this is minor and as the final dataset (i.e., bank additional full) is corrected and cleaned, we assume this to be not an issue at all in this dataset.
+
+Additionally, we can explore data imputation techniques to deal with "unknown" values in all variables.
+
+## Selection of Methods
+
+Double (post) lasso doesn't make much sense given we have a very long panel data here.
+
+We will be doing:
+* Matching
+* Double Debiased ML
+
+## Variables of interest for the first problem (i.e., Day of the Week)
+We need to define our variable of treatment, outcome and variable for suspected heterogeneity in treatment:
+* Y = subscribing to the product or not (i.e., outcome of marketing campaign: success vs failure)
+* D = being contacted during the Monday/Friday vs being contacted in the rest of the week
+
+Our intuition for the last one is we noticed that there are many more successes in the middle of the week rather than the rest of the week and this is likely due to a sort of "leisure/busy mindset" in the sense that people might be less open to unsolicited calls on friday/weekend when it is their leisure time, and Monday may be a sort of catch-up day for work in which case people might be too busy to have the time for such a call. This might be the reason why calls may be more successful in the middle of the working week.
+
+Recalling the variables that will be used in the construction of the treatment variable (D):
+  * campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+  * previous: number of contacts performed before this campaign and for this client (numeric)
+  
+Recalling the variables that will be used in the construction of the Heterogeneity variable (Z):
+  * day_of_week: last contact day of the week (categorical: "mon","tue","wed","thu","fri")
+  
+## Process of cleaning databases
+
+<!-- !!! To edit !!!- i.e., how Patryk à crée les datasets feather. -->
+
+
+Here below, I am using a cleaned and reformatted databases and filtering for successful contacts where it was the only contact of the campaign, as in the paper it mentioned that most of the following contacts were at the request of the customer, and therefore, not realistically a lever of the campaign the bank can control.
+
+```{r loading data reformatted + high-level exploration}
+# Clearing environment from old variables
+rm(data_table)
+rm(data_table_month)
+rm(data_table_day_of_week)
+rm(cor_matrix)
+rm(data_table_unclean)
+rm(numeric_data)
+rm(numeric_data_wo_na)
+
+# Read the .feather file
+data_table_bank <- as.data.table(arrow::read_feather("bank-full.feather"))
+data_table_bank_additional <- as.data.table(arrow::read_feather("bank-additional-full.feather"))
+
+dt_bank_filtered <- data_table_bank %>%
+  filter(campaign == 1)
+
+dt_bank_additional_filtered <- data_table_bank_additional %>%
+  filter(campaign == 1)
+
+print(summary(dt_bank_filtered))
+print(head(dt_bank_filtered))
+print(summary(dt_bank_additional_filtered))
+print(head(dt_bank_additional_filtered))
+```
+
+Below, we've have filtered the "cleaner" dataset for where the total campaign contacts are equal to 1 to account for the fact that making multiple contacts is mostly exogenous to the bank. 
+
+Additionally, We've recoded the pdays values to 3 values - either never having been contacted (which was coded as 999 in the dataset), having last been contacted within a week of the current contact and having last been contacted beyond a week. 
+
+We've looked at which variables are coded as having missing values, and found the following:
+
+* job - 158 unknown values
+* marital - 36 unknown values
+* education - 740 unknown values
+* default - 3481 unknown values
+* housing - 415 unknown values
+* loan - 415 unknown values 
+
+Source of description of method: https://libguides.princeton.edu/R-Missingdata
+Assuming the missing values are MAR, I then use the MICE package adopting the default imputation function to generate m imputed (using multiple imputation) datasets :
+
+* pmm: predictive mean matching (numeric data) 
+* logreg: logistic regression imputation (binary data, factor with 2 levels) 
+* polyreg: polytomous regression imputation for unordered categorical data (factor > 2 levels) 
+* polr: proportional odds model for (ordered, > 2 levels).
+
+and using the following literature to inform m = 5:
+
+* Bennet (2001) recommends choosing m between 5 and 10
+* Hawthorne and Elliott (2005) claim m value should be usually less than 10
+* Royston et al. recommend choosing m=3 or m=5
+
+The warning messages indicate it did not impute campaign (due to being == 1 for all values by design) and Y due to being filled in for all rows (i.e., no missing values), which is not an issue. 
+
+```{r recoding + imputation}
+# Filtering for total campaign contacts being equal to 1
+data_table_additional_filtered <- data_table_bank_additional %>%
+  filter(campaign == 1)
+
+# Recoding treatment
+#unique(data_table$day_of_week)
+open_mindset_days <- c("tue", "wed", "thu")
+closed_mindset_days <- c("mon", "fri")
+
+# Recoding the pdays variable in the "clean" dataset
+data_table_additional_filtered <- data_table_additional_filtered %>%
+  mutate(pdays = ifelse(pdays == "999", "not from a prev. campaign", ifelse(pdays <= 6, "contacted <= 6 days ago", ifelse(pdays >6, "contacted > 6 days ago", NA)))) %>%
+  mutate(D = ifelse(day_of_week %in% open_mindset_days, 1, 0)) %>%
+  mutate(Y = ifelse(y == "yes", 1, ifelse(y == "no", 0, NA))) %>%
+  mutate(Year = year(date_month)) %>%
+  mutate(Month = month(date_month))
+
+# Finding unknowns / missing values
+colnames(data_table_additional_filtered)
+sum(is.na(data_table_additional_filtered$age))
+sum(data_table_additional_filtered$age == "unknown")
+sum(is.na(data_table_additional_filtered$job))
+sum(data_table_additional_filtered$job == "unknown") # 158 unknown values
+sum(is.na(data_table_additional_filtered$marital)) 
+sum(data_table_additional_filtered$marital == "unknown") # 36 unknown values
+sum(is.na(data_table_additional_filtered$education)) 
+sum(data_table_additional_filtered$education == "unknown") # 740 unknown values
+sum(is.na(data_table_additional_filtered$default)) 
+sum(data_table_additional_filtered$default == "unknown") # 3481 unknown values
+sum(is.na(data_table_additional_filtered$housing)) 
+sum(data_table_additional_filtered$housing == "unknown") # 415 unknown values
+sum(is.na(data_table_additional_filtered$loan))
+sum(data_table_additional_filtered$loan == "unknown") # 415 unknown values
+sum(is.na(data_table_additional_filtered$contact))
+sum(data_table_additional_filtered$contact == "unknown")
+sum(is.na(data_table_additional_filtered$month))
+sum(data_table_additional_filtered$month == "unknown")
+sum(is.na(data_table_additional_filtered$day_of_week))
+sum(data_table_additional_filtered$day_of_week == "unknown")
+sum(is.na(data_table_additional_filtered$duration))
+sum(data_table_additional_filtered$duration == "unknown")
+sum(is.na(data_table_additional_filtered$campaign))
+sum(data_table_additional_filtered$campaign == "unknown")
+sum(is.na(data_table_additional_filtered$pdays))
+sum(data_table_additional_filtered$pdays == "unknown")
+sum(is.na(data_table_additional_filtered$previous))
+sum(data_table_additional_filtered$previous == "unknown")
+sum(is.na(data_table_additional_filtered$poutcome))
+sum(data_table_additional_filtered$poutcome == "unknown")
+
+# Recoding "unknown" values as missing values 
+data_table_additional_filtered <- data_table_additional_filtered %>%
+  mutate(job = ifelse(job == "unknown", NA, job),
+         marital = ifelse(marital == "unknown", NA, marital),
+         education = ifelse(education == "unknown", NA, education),
+         default = ifelse(default == "unknown", NA, default),
+         housing = ifelse(housing == "unknown", NA, housing),
+         loan = ifelse(loan == "unknown", NA, loan),
+         )
+
+data_table_additional_filtered[] <- lapply(data_table_additional_filtered, function(x) if (is.character(x)) as.factor(x) else x) 
+
+# Sanity check
+# colnames <- colnames(data_table_additional_filtered)
+# for (i in colnames) {
+#   print(class(data_table_additional_filtered[, ..i][[1]]))
+# }
+
+##  To look at imputation methods
+# Set the seed for reproducibility
+set.seed(12345)
+
+# Perform Multiple Imputation
+imputed_data_additional <- mice(data_table_additional_filtered, m=5) # see help(mice) for other methods
+# Source of Warning :  Did not impute campaign (due to being == 1 for all values by design) and Y due to being filled in for all rows (i.e., no missing values)
+
+# Extract the first imputed dataset (use 'm' argument for other imputations if necessary) - Sanity check
+# imputed_data_additional_1 <- as.data.table(complete(imputed_data_additional, action = 1))  # action = 1 for the first
+
+# sanity check
+#imputed_data_additional$loggedEvents
+```
+
+## Double Debiased ML
+
+Quote taken from the paper on DDML titled "ddml: Double/debiased machine learning in Stata" - https://arxiv.org/pdf/2301.09397
+
+"DDML increases the set of machine learners that researchers can leverage for estimation of causal effects. Deciding which learner is most suitable for a particular application is difficult, however, since researchers are rarely certain about the structure of the underlying data generating process. A practical solution is to construct combinations of a
+diverse set of machine learners using stacking (Wolpert 1992; Breiman 1996). Stacking is a meta learner given by a weighted sum of individual machine learners (the “base learners”). When the weights corresponding to the base learners are chosen to maximize out-of-sample predictive accuracy, this approach hedges against the risk of relying on
+any particular poorly suited or ill-tuned machine learner."
+
+Below, we've used all the variables, save for duration, finding it likely to be affected by the treatment and consequently post-treatment. Additionally, we are including time-varying macro variables, assuming the impact of subscribing to deposits to be limited on influencing these variables, assuming no coordination effect.
+
+Below we've used random forests as both learners, we will also later explore trying other learners.
+
+Another quote from the same paper on the choice of learners:
+"While asymptotic properties of common machine learners remain an highly active research area, recent advances provide convergence rates for special instances of many machine learners, including lasso (Bickel et al. 2009; Belloni et al. 2012), random forests (Wager and Walther 2016; Wager and Athey 2018; Athey et al. 2019), neural networks (Schmidt-Hieber 2020; Farrell et al. 2021), and boosting (Luo et al. 2022). It seems likely that many popular learners will fall under the umbrella of suitable learners as theoretical results are further developed. However, we note that currently known asymptotic properties do not cover a wide range of learners, such as very deep and wide neural networks and deep random forests, as they are currently implemented in practice."
+
+Additionally, another quote on the topic of combining learners from the same paper and for decision to choose pooled stacking over short stacking:
+"Pooled stacking. A variant of stacking specific to DDML is pooled stacking. Standard stacking fits the final learner K separate times, once in each cross-fitting step, yielding K separate sets of stacking weights ˆwk,j for the J learners. With DDML pooled stacking, we can impose the additional constraint in (18) that the weights are the same across
+all cross-fit folds, ˆwk,j = ˆwj , ∀ k. By returning a single set of stacking weights, pooled stacking imposes an additional degree of regularization and facilitates interpretation but suffers from the same high computational cost as pairing DDML with (regular) stacking."
+
+Therefore, in an ideal world, we would have used the STATA package and done pooled stacking but the equivalent R package is less developed than the former, offering no option to stack multiple learners, therefore we will explore doing stacking prior to using the package.
+
+ATE in a Partially Linear Model (PLR) model - assuming treatment effects are additive and follow a linear form.  
+
+```{r doubleML PLR}
+set.seed(75523)
+
+y = "Y"
+d = "D"
+x = c("age","job", "marital","education","default","housing", "loan", "previous", "poutcome", "contact","Year", "Month","campaign", "pdays", "emp.var.rate","cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed", "euribor_12mo", "hicp", "cons_confidence", "unemployment", "stoxx_return") #,"duration"
+
+i = c(1,2,3,4,5)
+
+learner_g <- lrn("regr.ranger") 
+learner_m <- lrn("classif.ranger") 
+
+# Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i)) 
+  dml_data <- DoubleMLData$new(imputed_data_additional_temp, y_col = y, d_cols = d, x_cols = x)
+  dml_plr <- DoubleMLPLR$new(dml_data,
+                           ml_m = learner_m,
+                           ml_g = learner_g,
+                           score = "partialling out",
+                           n_folds = 5, n_rep = 1)
+  # performs the ATE estimations and print the results
+  dml_plr$fit()
+  print(dml_plr$summary())
+}
+
+```
+<!-- Analysis when call duration included as a covariate (INCORRECT):  -->
+<!-- Hence we can reject H_0 at the 0.1% significance level for 4/5 iterations of the imputation and 1/5 at the 1% significance level. -->
+
+<!-- The ATE on whether a potential customer contacted is positive and significant (0.7%) from being contacted in the middle of the work week contrary to being contacted in days where a person is closer to the weekend and may have a more closed mindset, suggesting there may be an effect of a "business mindset". -->
+
+Hence we can reject H_0 at the 0.1% significance level for 5/5 iterations of the imputation.
+
+The ATE on whether a potential customer contacted is positive and generally significant (0.9-1%) from being contacted in the middle of the work week contrary to being contacted in days where a person is closer to the weekend and may have a more closed mindset, suggesting there may be a small effect of a "business mindset".
+
+ATE in an Interactive Regression Model (IRM) model - allowing treatment effects to be entirely heterogeneous.
+```{r doubleML IRM}
+set.seed(75523)
+
+learner_classif_m <- lrn("classif.ranger") # , num.trees = 500,  min.node.size = 2, max.depth = 5
+
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i)) 
+  dml_data <- DoubleMLData$new(imputed_data_additional_temp, y_col = y, d_cols = d, x_cols = x)
+  dml_irm <- DoubleMLIRM$new(dml_data,
+                           ml_m = learner_classif_m,
+                           ml_g = learner_g,
+                           score = "ATE", #or "ATTE"
+                           n_folds = 10, n_rep = 1)
+  dml_irm$fit()
+  print(dml_irm$summary())
+} 
+```
+
+We get consistent and positive significant effects at the 1% level for both methods i.e., an effect of around 1.3% on likelihood of accepting to subscribe in the middle of the week contrarily to the rest of the week. 
+
+ATE in a Partially Linear Model (PLR) model  - assuming treatment effects are additive and follow a linear form - with hyperparameter selection through tuning using CV and grid search. 
+
+Source: https://mlr3book.mlr-org.com/chapters/chapter4/hyperparameter_optimization.html
+"The tuning instance collects the tuner-agnostic information required to optimize a model, i.e., all information about the tuning process, except for the tuning algorithm itself. This includes the task to tune over, the learner to tune, the resampling method and measure used to analytically compare hyperparameter optimization configurations, and the terminator to determine when the measure has been optimized ‘enough’."
+
+```{r PLR + tuning}
+set.seed(2)
+ml_g <- lrn("regr.ranger") 
+ml_m <- lrn("classif.ranger") 
+
+param_grid = list(
+  "ml_g" = paradox::ps(
+    num.trees = paradox::p_int(lower = 50, upper = 500),
+    mtry = paradox::p_int(lower = 1, upper = 5),
+    min.node.size = paradox::p_int(lower = 5, upper = 10)),
+  "ml_m" = paradox::ps(
+    num.trees = paradox::p_int(lower = 50, upper = 500),
+    mtry = paradox::p_int(lower = 1, upper = 5),
+    min.node.size = paradox::p_int(lower = 5, upper = 10)))
+
+tune_settings = list(
+  terminator = mlr3tuning::trm("evals", n_evals = 5),
+  algorithm = mlr3tuning::tnr("grid_search", resolution = 5))
+
+# Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i)) 
+  dml_data <- DoubleMLData$new(imputed_data_additional_temp, y_col = y, d_cols = d, x_cols = x)
+  
+  dml_plr <- DoubleMLPLR$new(dml_data,
+                           ml_m = ml_m,
+                           ml_g = ml_g,
+                           score = "partialling out",  
+                           n_folds = 5, n_rep = 1)
+  
+  dml_plr$tune(param_set = param_grid, tune_settings = tune_settings)
+  # performs the ATE estimations and print the results
+  dml_plr$fit()
+  print(dml_plr$summary())
+}
+
+```
+```{r IRM + tuning}
+set.seed(2)
+
+ml_g <- lrn("regr.ranger") 
+ml_m <- lrn("classif.ranger") 
+
+param_grid = list(
+  "ml_g" = paradox::ps(
+    num.trees = paradox::p_int(lower = 50, upper = 500),
+    mtry = paradox::p_int(lower = 1, upper = 5),
+    min.node.size = paradox::p_int(lower = 5, upper = 10)),
+  "ml_m" = paradox::ps(
+    num.trees = paradox::p_int(lower = 50, upper = 500),
+    mtry = paradox::p_int(lower = 1, upper = 5),
+    min.node.size = paradox::p_int(lower = 5, upper = 10)))
+
+tune_settings = list(
+  terminator = mlr3tuning::trm("evals", n_evals = 5),
+  algorithm = mlr3tuning::tnr("grid_search", resolution = 5))
+
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i)) 
+  dml_data <- DoubleMLData$new(imputed_data_additional_temp, y_col = y, d_cols = d, x_cols = x)
+  dml_irm <- DoubleMLIRM$new(dml_data,
+                           ml_m = ml_m,
+                           ml_g = ml_g,
+                           score = "ATE", #or "ATTE"
+                           n_folds = 10, n_rep = 1)
+  dml_plr$tune(param_set = param_grid, tune_settings = tune_settings)
+  dml_irm$fit()
+  print(dml_irm$summary())
+} 
+```
+
+Now to repeat the exercise with multiple learners and using ensemble learner to combine them - the R package not having a pooling method as in the STATA package. Below, we've created a learner with predictions that are generated as an average from the different learners considered. In the first step, we split up the pipeline into as many branches as there are learners. Then, the learners estimate the nuisance parts independently of each other and we average the predictions.
+
+```{r ensemble + tuning}
+library(mlr3)
+library(mlr3learners)
+library(mlr3pipelines)
+library(mlr3tuning)
+library(paradox)
+
+# ---- Tuning Setup ----
+
+tune_settings = list(
+  terminator = trm("evals", n_evals = 5),
+  tuner = tnr("grid_search", resolution = 5)
+)
+
+# Helper to wrap a learner in AutoTuner
+auto_tuner = function(learner, param_set, id) {
+  # Determine whether it's classification or regression
+  if (grepl("^classif", learner$id)) {
+    measure = msr("classif.ce")
+  } else {
+    measure = msr("regr.mse")
+  }
+
+  AutoTuner$new(
+    learner = learner,
+    resampling = rsmp("cv", folds = 5),
+    measure = measure,
+    search_space = param_set,
+    terminator = tune_settings$terminator,
+    tuner = tune_settings$tuner,
+    store_models = TRUE,
+    id = id
+  )
+}
+
+
+# ---- Classifiers ----
+
+at_nnet = auto_tuner(
+  lrn("classif.nnet"),
+  ps(
+    size = p_int(1, 10),
+    decay = p_dbl(0.0, 0.1)
+  ),
+  "nnet"
+)
+
+at_logreg = lrn("classif.log_reg")
+
+at_rf = auto_tuner(
+  lrn("classif.ranger"),
+  ps(
+    num.trees = p_int(50, 500),
+    mtry = p_int(1, 5),
+    min.node.size = p_int(5, 10)
+  ),
+  "ranger"
+)
+
+graph_ensemble_classif = gunion(list(
+  po("learner", at_nnet),
+  po("learner", at_logreg),
+  po("learner", at_rf)
+)) %>>% po("classifavg")
+
+ensemble_learner = GraphLearner$new(graph_ensemble_classif)
+ensemble_pipe_classif = as_learner(ensemble_learner)
+
+# ---- Regressors ----
+
+at_lm = lrn("regr.lm")
+
+at_nnet_reg = auto_tuner(
+  lrn("regr.nnet"),
+  ps(
+    size = p_int(1, 10),
+    decay = p_dbl(0.0, 0.1)
+  ),
+  "nnet_reg"
+)
+
+at_rf_reg = auto_tuner(
+  lrn("regr.ranger"),
+  ps(
+    num.trees = p_int(50, 500),
+    mtry = p_int(1, 5),
+    min.node.size = p_int(1, 10)
+  ),
+  "rf_reg"
+)
+
+at_xgb = auto_tuner(
+  lrn("regr.xgboost"),
+  ps(
+    nrounds = p_int(50, 300),
+    eta = p_dbl(0.01, 0.3),
+    max_depth = p_int(2, 10)
+  ),
+  "xgb"
+)
+
+graph_ensemble_reg = gunion(list(
+  po("learner", at_lm),
+  po("learner", at_nnet_reg),
+  po("learner", at_rf_reg),
+  po("learner", at_xgb)
+)) %>>% po("regravg")
+
+ensemble_learner_reg = GraphLearner$new(graph_ensemble_reg)
+ensemble_pipe_reg = as_learner(ensemble_learner_reg)
+
+```
+
+Partial Linear Model DoubleML:
+```{r ensemble + tuning PLM}
+set.seed(75523)
+
+#Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i))
+  encoded <- model.matrix(~ . - 1, data = imputed_data_additional_temp)  # "-1" removes the intercept, (One-hot encoding)
+  encoded_df <- as.data.frame(encoded)
+  y = "Y"
+  d = "D"
+  x = c("age",'jobblue-collar','jobentrepreneur','jobhousemaid','jobmanagement','jobretired','jobself-employed','jobservices','jobstudent','jobtechnician','jobunemployed','maritalmarried','maritalsingle','educationbasic.6y','educationbasic.9y','educationhigh.school','educationilliterate','educationprofessional.course','educationuniversity.degree','defaultyes','housingyes','loanyes','contacttelephone','campaign','pdayscontacted > 6 days ago','pdaysnot from a prev. campaign','previous','poutcomenonexistent','poutcomesuccess','emp.var.rate','cons.price.idx','cons.conf.idx','euribor3m','nr.employed','euribor_12mo','hicp','cons_confidence','unemployment','stoxx_return','Year','Month') #,"duration"
+  dml_data <- DoubleMLData$new(encoded_df, y_col = y, d_cols = d, x_cols = x)
+  dml_plr <- DoubleMLPLR$new(dml_data,
+                           ml_m = ensemble_pipe_classif,
+                           ml_g = ensemble_pipe_reg,
+                           score = "partialling out",
+                           n_folds = 5, n_rep = 1)
+  # performs the ATE estimations and print the results
+  dml_plr$fit()
+  print(dml_plr$summary())
+}
+
+```
+```{r ensemble + tuning IRM}
+set.seed(75523)
+
+#Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i))
+  encoded <- model.matrix(~ . - 1, data = imputed_data_additional_temp)  # "-1" removes the intercept, (One-hot encoding)
+  encoded_df <- as.data.frame(encoded)
+  y = "Y"
+  d = "D"
+  x = c("age",'jobblue-collar','jobentrepreneur','jobhousemaid','jobmanagement','jobretired','jobself-employed','jobservices','jobstudent','jobtechnician','jobunemployed','maritalmarried','maritalsingle','educationbasic.6y','educationbasic.9y','educationhigh.school','educationilliterate','educationprofessional.course','educationuniversity.degree','defaultyes','housingyes','loanyes','contacttelephone','campaign','pdayscontacted > 6 days ago','pdaysnot from a prev. campaign','previous','poutcomenonexistent','poutcomesuccess','emp.var.rate','cons.price.idx','cons.conf.idx','euribor3m','nr.employed','euribor_12mo','hicp','cons_confidence','unemployment','stoxx_return','Year','Month') #,"duration"
+  dml_data <- DoubleMLData$new(encoded_df, y_col = y, d_cols = d, x_cols = x)
+  dml_irm <- DoubleMLIRM$new(dml_data,
+                           ml_m = ensemble_pipe_classif,
+                           ml_g = ensemble_pipe_reg,
+                           score = "ATE", #or "ATTE"
+                           n_folds = 10, n_rep = 1)
+  # performs the ATE estimations and print the results
+  dml_irm$fit()
+  print(dml_irm$summary())
+}
+
+```
+
+
+Appendix:
+
+
+Below is the code for using multiple learners and combining them using ensemble methods w/o tuning i.e., taking the average prediction of all learners.
+
+```{r doubleML PLR multiple learners}
+library(mlr3)
+library(mlr3pipelines)
+library(mlr3learners)
+
+# Define classification learners with IDs
+learner_nnet   = lrn("classif.nnet")
+learner_logreg = lrn("classif.log_reg")
+learner_rf     = lrn("classif.ranger")
+
+# Build the ensemble graph
+graph_ensemble_classif = gunion(list(
+  po("learner", learner_nnet),
+  po("learner", learner_logreg),
+  po("learner", learner_rf)
+)) %>>%
+  po("classifavg")
+
+# Wrap it into a GraphLearner
+ensemble_learner = GraphLearner$new(graph_ensemble_classif)
+
+# Show summary
+print(ensemble_learner)
+
+# Plot the graph
+ensemble_learner$plot()
+
+ensemble_pipe_classif = as_learner(ensemble_learner)
+
+# Regressors
+
+# Define classification learners with IDs
+learner_lm_reg = lrn("regr.lm")
+learner_nnet_reg   = lrn("regr.nnet")
+learner_rf_reg = lrn("regr.ranger")
+learner_rf_elas     = lrn("regr.cv_glmnet")
+learner_xgboost_reg     = lrn("regr.xgboost")
+
+# Build the ensemble graph
+graph_ensemble_reg = gunion(list(
+  po("learner", learner_lm_reg),
+  po("learner", learner_nnet_reg),
+  po("learner", learner_rf_reg),
+  po("learner", learner_xgboost_reg),
+  po("learner", learner_rf_elas)
+)) %>>%
+  po("regravg")
+
+# Wrap it into a GraphLearner
+ensemble_learner_reg = GraphLearner$new(graph_ensemble_reg)
+
+# Show summary
+print(ensemble_learner_reg)
+
+# Plot the graph
+ensemble_learner_reg$plot()
+
+ensemble_pipe_reg = as_learner(ensemble_learner_reg)
+```
+
+For carrying out PLM Double ML method using ensemble learners.
+
+```{r ensemble continued PLM}
+set.seed(75523)
+
+# Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i))
+  # One-hot encode factor columns for XGBoost and Elastic Net
+  encoded <- model.matrix(~ . - 1, data = imputed_data_additional_temp)  # "-1" removes the intercept
+  encoded_df <- as.data.frame(encoded)
+  y = "Y"
+  d = "D"
+  x = c("age",'jobblue-collar','jobentrepreneur','jobhousemaid','jobmanagement','jobretired','jobself-employed','jobservices','jobstudent','jobtechnician','jobunemployed','maritalmarried','maritalsingle','educationbasic.6y','educationbasic.9y','educationhigh.school','educationilliterate','educationprofessional.course','educationuniversity.degree','defaultyes','housingyes','loanyes','contacttelephone','campaign','pdayscontacted > 6 days ago','pdaysnot from a prev. campaign','previous','poutcomenonexistent','poutcomesuccess','emp.var.rate','cons.price.idx','cons.conf.idx','euribor3m','nr.employed','euribor_12mo','hicp','cons_confidence','unemployment','stoxx_return','Year','Month') #,"duration"
+  dml_data <- DoubleMLData$new(encoded_df, y_col = y, d_cols = d, x_cols = x)
+  dml_irm <- DoubleMLIRM$new(dml_data,
+                           ml_m = learner_classif_m,
+                           ml_g = learner_g,
+                           score = "ATE", #or "ATTE"
+                           n_folds = 10, n_rep = 1)
+  # performs the ATE estimations and print the results
+  dml_irm$fit()
+  print(dml_irm$summary())
+}
+
+```
+
+
+```{r ensemble continued IRM}
+set.seed(75523)
+
+# Looping through the different imputed dataset
+for (j in i){
+  imputed_data_additional_temp <- as.data.table(complete(imputed_data_additional, action = i))
+  # One-hot encode factor columns for XGBoost and Elastic Net
+  encoded <- model.matrix(~ . - 1, data = imputed_data_additional_temp)  # "-1" removes the intercept
+  encoded_df <- as.data.frame(encoded)
+  y = "Y"
+  d = "D"
+  x = c("age",'jobblue-collar','jobentrepreneur','jobhousemaid','jobmanagement','jobretired','jobself-employed','jobservices','jobstudent','jobtechnician','jobunemployed','maritalmarried','maritalsingle','educationbasic.6y','educationbasic.9y','educationhigh.school','educationilliterate','educationprofessional.course','educationuniversity.degree','defaultyes','housingyes','loanyes','contacttelephone','campaign','pdayscontacted > 6 days ago','pdaysnot from a prev. campaign','previous','poutcomenonexistent','poutcomesuccess','emp.var.rate','cons.price.idx','cons.conf.idx','euribor3m','nr.employed','euribor_12mo','hicp','cons_confidence','unemployment','stoxx_return','Year','Month') #,"duration"
+  dml_data <- DoubleMLData$new(encoded_df, y_col = y, d_cols = d, x_cols = x)
+  dml_plr <- DoubleMLPLR$new(dml_data,
+                           ml_m = ensemble_pipe_reg,
+                           ml_g = learner_g,
+                           score = "partialling out",
+                           n_folds = 5, n_rep = 1)
+  # performs the ATE estimations and print the results
+  dml_plr$fit()
+  print(dml_plr$summary())
+}
+
+```
+
+
+
+--------------------------------------------------------------------------------
+
+Doing the exercise with day of the week: 
+```{r variables of interest}
+unique(data_table_unclean$month)
+
+data_table_unclean2 <- data_table_unclean %>%
+  mutate(end_day_month = case_when(
+    month == "jan" ~ 31,
+    month == "feb" ~ 28,
+    month == "mar" ~ 31,
+    month == "apr" ~ 30,
+    month == "may" ~ 31,
+    month == "jun" ~ 30,
+    month == "jul" ~ 31,
+    month == "aug" ~ 31,
+    month == "sep" ~ 30,
+    month == "oct" ~ 31,
+    month == "nov" ~ 30,
+    month == "dec" ~ 31
+  )) %>%
+  mutate(day_prop_month = day / end_day_month) %>%
+  mutate(day_semi = ifelse(day <= 15, 0, 1))
+
+set.seed(75523)
+
+data_table_unclean_omit <- na.omit(data_table_unclean2) %>%
+  distinct() %>%
+  mutate(y = ifelse(y == "yes", 1, ifelse(y == "no", 0, NA)))
+  
+y = "y"
+d = "day_semi" # if 1, last half of the month
+x = c("age","job","marital","education","default","balance","housing", "loan", "contact", "month", "duration","campaign", "pdays", "previous", "poutcome")
+
+```
+
+
