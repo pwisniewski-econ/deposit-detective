@@ -1,0 +1,340 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+%
+\documentclass[
+  12pt,
+]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else  
+    % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\setcounter{secnumdepth}{5}
+
+
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+% Scale images if necessary, so that they will not overflow the page
+% margins by default, and it is still possible to overwrite the defaults
+% using explicit options in \includegraphics[width, height, ...]{}
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+% Set default figure placement to htbp
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+
+\usepackage{graphicx}
+\usepackage{pdflscape}
+\usepackage{pdfpages}
+\newcommand*{\boldone}{\text{\usefont{U}{bbold}{m}{n}1}}
+\usepackage[a4paper, portrait, footnotesep=0.75cm, margin=2.54cm]{geometry}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{titling}
+\linespread{1.5}
+\usepackage[T1]{fontenc}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{linkcolor={black}}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage[normalem]{ulem}
+\usepackage{times}
+\usepackage{sectsty}
+\usepackage{ressources/tikz/tikzit}
+\input{ressources/tikz/tikz.tikzstyles}
+\newcommand{\ts}{\textsuperscript}
+\makeatletter
+\@ifpackageloaded{caption}{}{\usepackage{caption}}
+\AtBeginDocument{%
+\ifdefined\contentsname
+  \renewcommand*\contentsname{Table of contents}
+\else
+  \newcommand\contentsname{Table of contents}
+\fi
+\ifdefined\listfigurename
+  \renewcommand*\listfigurename{List of Figures}
+\else
+  \newcommand\listfigurename{List of Figures}
+\fi
+\ifdefined\listtablename
+  \renewcommand*\listtablename{List of Tables}
+\else
+  \newcommand\listtablename{List of Tables}
+\fi
+\ifdefined\figurename
+  \renewcommand*\figurename{Figure}
+\else
+  \newcommand\figurename{Figure}
+\fi
+\ifdefined\tablename
+  \renewcommand*\tablename{Table}
+\else
+  \newcommand\tablename{Table}
+\fi
+}
+\@ifpackageloaded{float}{}{\usepackage{float}}
+\floatstyle{ruled}
+\@ifundefined{c@chapter}{\newfloat{codelisting}{h}{lop}}{\newfloat{codelisting}{h}{lop}[chapter]}
+\floatname{codelisting}{Listing}
+\newcommand*\listoflistings{\listof{codelisting}{List of Listings}}
+\makeatother
+\makeatletter
+\makeatother
+\makeatletter
+\@ifpackageloaded{caption}{}{\usepackage{caption}}
+\@ifpackageloaded{subcaption}{}{\usepackage{subcaption}}
+\makeatother
+\makeatletter
+\@ifpackageloaded{tcolorbox}{}{\usepackage[skins,breakable]{tcolorbox}}
+\makeatother
+\makeatletter
+\@ifundefined{shadecolor}{\definecolor{shadecolor}{HTML}{5b5b5b}}{}
+\makeatother
+\makeatletter
+\@ifundefined{codebgcolor}{\definecolor{codebgcolor}{HTML}{fafafa}}{}
+\makeatother
+\makeatletter
+\ifdefined\Shaded\renewenvironment{Shaded}{\begin{tcolorbox}[enhanced, sharp corners, borderline west={3pt}{0pt}{shadecolor}, frame hidden, boxrule=0pt, breakable, colback={codebgcolor}]}{\end{tcolorbox}}\fi
+\makeatother
+
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\usepackage{bookmark}
+
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same} % disable monospaced font for URLs
+\hypersetup{
+  colorlinks=true,
+  linkcolor={blue},
+  filecolor={Maroon},
+  citecolor={black},
+  urlcolor={gray},
+  pdfcreator={LaTeX via pandoc}}
+
+
+\author{}
+\date{}
+
+\begin{document}
+
+\input{ressources/title-page/title-page.tex}
+
+
+\clearpage
+
+\section{Introduction and Relevant
+Literature}\label{introduction-and-relevant-literature}
+
+\newpage
+
+\section{Data}\label{data}
+
+\subsection{Marketing Campaign}\label{marketing-campaign}
+
+\begin{figure}
+\centering
+\caption{Campaign Process and Observed Data}
+\tikzfig{ressources/tikz/fig1}
+\end{figure}
+
+\subsection{Descriptive Statistics}\label{descriptive-statistics}
+
+\subsection{Exploratory Analysis}\label{exploratory-analysis}
+
+\newpage
+
+\section{Methodology and Objectives}\label{methodology-and-objectives}
+
+\newpage
+
+\section{Weekdays}\label{weekdays}
+
+\subsection{PICO process}\label{pico-process}
+
+\subsection{DAG and Hypothesis}\label{dag-and-hypothesis}
+
+\subsection{Results}\label{results}
+
+\subsection{Heterogeneity Analysis}\label{heterogeneity-analysis}
+
+\newpage
+
+\section{Time of the month}\label{time-of-the-month}
+
+\subsection{PICO process}\label{pico-process-1}
+
+\subsection{DAG and Hypothesis}\label{dag-and-hypothesis-1}
+
+\subsection{Results}\label{results-1}
+
+\subsection{Heterogeneity Analysis}\label{heterogeneity-analysis-1}
+
+\newpage
+
+\section{Macro Context}\label{macro-context}
+
+This section analyzes macroeconomic determinants of the marketing
+campaign, focusing on the impact of interest rates on product take-up
+rates. The specific rate offered to consumers is unobserved; however,
+the product, a term deposit, is among the fastest to react to changes in
+market conditions. The 12-month EURIBOR rate is used as a proxy, given
+its strong predictive power for such products. The objective is to
+estimate consumer demand elasticity with respect to interest rates. This
+has two key implications for the offering bank: it informs the expected
+effect of offering a more competitive rate or supports assessment of
+campaign viability when pricing power is limited and rates are
+determined by market conditions.
+
+\subsection{PICO summary}\label{pico-summary}
+
+\textbf{Population}: The population of interest consists of bank
+consumers; however, due to previously mentioned data limitations, the
+analysis is restricted to clients who participated in the marketing
+campaign. To simplify the study design, only clients who received a
+single call are included.
+
+\textbf{Intervention}: Variation in market interest rates which was
+particularly pronounced during the 2008--2010 period is leveraged to
+estimate demand elasticity.
+
+\textbf{Comparison}: Clients exposed to lower market interest rates
+serve as a control group for those exposed to higher interest rates.
+
+\textbf{Outcome}: The primary outcome of interest is the take-up of the
+offered savings product, measured as a change in the take-up rate.
+
+\subsection{DAG and Hypothesis}\label{dag-and-hypothesis-2}
+
+The main challenge in identifying the effect of interest rates on
+take-up rates is endogeneity. Specifically, interest rates represent
+market prices for capital and are thus the joint outcome of both supply
+and demand.
+
+This is problematic because interest rates are correlated with demand
+shocks, which directly influence take-up behavior. A clear example is
+the bankruptcy of Lehman Brothers, which marked the onset of the great
+financial crisis. This significantly altered investor risk preferences,
+leading to a substantial inflow of capital into safer financial
+instruments such as deposits or fixed term accounts.
+
+The directed acyclic graph below summarizes the primary causal
+relationships assumed in this section.
+
+\begin{figure}
+\centering
+\caption{Interest Rates and Take-Up}
+\vspace{0.25cm}
+\tikzfig{ressources/tikz/fig2}
+\end{figure}
+\vspace{-1cm}
+
+Under the structure outlined in the DAG, the lagged interest rate at
+period \(t-1\) can be considered a valid instrument, provided that
+variables influenced by this rate are appropriately controlled for. The
+intuition behind this instrument is based on interest rate stickiness:
+financial products are often priced based on previously observed rates,
+while current market rates reflect present expectations rather than past
+ones. Therefore, contemporaneous demand shocks can be assumed to be
+uncorrelated with lagged interest rates.
+
+This type of instrument and identification strategy is well-established
+in the macroeconomic literature. However, the exogeneity of the
+instrument cannot be formally tested. The absence of strong alternative
+instruments in our dataset rule out the possibility of conducting
+over-identification tests such as the Sargan--J test.
+
+\subsection{Results}\label{results-2}
+
+To estimate causal effects, three methodological approaches are employed
+and compared: (i) a standard two-stage least squares (2SLS) estimator
+applied to a linear probability model, (ii) a double machine learning
+(DML) estimator for a partially linear instrumental variables (IV)
+regression, and (iii) a probit IV regression.
+
+\newpage
+
+TABLE HERE DML and Probit are close 2SLS very different
+
+{[}Discussion of 2SLS + equations{]}
+
+{[}Discussion of DML + equations{]}
+
+{[}Discussion of Probit + equations{]}
+
+{[}Conclusion on results{]}
+
+\newpage
+
+\section{Conclusion}\label{conclusion}
+
+\subsection{Discussion}\label{discussion}
+
+\subsection{Limitations}\label{limitations}
+
+\newpage
+
+\section{Bibliography}\label{bibliography}
+
+\newpage
+
+\setcounter{section}{0}
+\renewcommand\thesection{\Alph{section}}
+
+\section{Appendix}\label{appendix}
+
+\subsection{Robustness}\label{robustness}
+
+\subsection{Robustness}\label{robustness-1}
+
+\subsection{Robustness}\label{robustness-2}
+
+
+
+
+\end{document}

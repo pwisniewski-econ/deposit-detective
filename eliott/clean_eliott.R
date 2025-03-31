@@ -33,8 +33,8 @@ dataset <- dataset %>%
          contact != "unknown"
   )
 
-# removing some variables added by us
-dataset <- dataset[, !names(dataset) %in% c("euribor_12mo", "hicp", "cons_confidence", "unemployment", "stoxx_return")]
+# removing some macro variables because we added by their equivalent
+dataset <- dataset[, !names(dataset) %in% c("euribor3m", "cons.price.idx", "cons.conf.idx", "emp.var.rate", "nr.employed")]
 
 # removing post-treatment variables
 dataset <- subset(dataset, select = -duration)
@@ -86,10 +86,6 @@ str(dataset)
 # imbalanced outcome
 prop.table(table(dataset$outcome))
 
-# Weights to mitigate imbalance in outcome
-# 3.72 is selected by CV
-weights <- ifelse(dataset$outcome == "Yes", 3.72, 1)
-
 # Covariate Balance Table: checking
 covariates = colnames(dataset)[colnames(dataset) != "treatment"]
 covariates = covariates[covariates != "outcome"]
@@ -116,7 +112,7 @@ str(data_logit)
 # economic recovery, and any effect related to the current state of the world in 
 # Portugal at the time of the call
 logit_model <- glm(outcome ~ treatment + .,
-                   data = data_logit, family = binomial, weights = weights)
+                   data = data_logit, family = binomial)
 
 # Print summary of the model
 summary(logit_model)

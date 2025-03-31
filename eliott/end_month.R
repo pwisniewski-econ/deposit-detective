@@ -130,7 +130,7 @@ str(data_logit)
 # economic recovery, and any effect related to the current state of the world in 
 # Portugal at the time of the call
 logit_model <- glm(outcome ~ treatment + .,
-                   data = data_logit, family = binomial, weights = weights)
+                   data = data_logit, family = binomial)
 
 # Print summary of the model
 summary(logit_model)
