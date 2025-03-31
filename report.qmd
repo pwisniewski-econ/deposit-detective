@@ -60,6 +60,12 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 The Mobile Marketing Association defines telemarketing as, “A set of practices that enables organisations to communicate and engage with their audience in an interactive and relevant manner through any mobile device or network.” Telemarketing has been widely use in the banking sector as a way to engage with customers in cost-efficient and personalized manner. It became popular in the 1980s and financial institutions started to set up call centers and build consumer databases. The objective was to reach more people and stop relying on in-person sales. With telemarketing, banks could promote specific products like loans, credit cards or term deposits. 
 
+Several factors have contributed to the adoption of telemarketing, including its higher conversion rates compared to mass marketing, the need for rapid customer outreach, and the ability to easily monitor campaign performance. However, this approach also presents challenges, such as low response rates, customer fatigue, and the negative perception of unsolicited calls. One of the key difficulties institutions face is identifying which customers are most likely to subscribe to a given product.
+Given the complexity of telemarketing campaigns, many different factors can influence their success, making it difficult to pinpoint the key drivers of positive outcomes. Rasool Basha (2024) conducted a study on the effectiveness of telemarketing in the banking industry and highlighted the importance of factors such as the skill level of telemarketers, the quality of the call list, and the time of day when calls are made.
+Consumer confidence regarding the state of the economy may also play a crucial role. Matsusaka and Sbordone, in their paper Consumer Confidence and Economic Fluctuations (1995), showed through macroeconomic models that pessimism about the economy can lead to a slowdown in output, even if that pessimism is not economically justified.
+A more data-driven approach can help financial institutions optimize their telemarketing strategies. Moro, Cortez, and Rita (2014) analyzed a Portuguese banking dataset to predict the success of telemarketing calls for selling term deposits. Their study tested several machine learning models and found that neural networks performed best in predicting customer responses. Additionally, they identified key predictive factors such as the Euribor rate, the direction of the call (inbound or outbound), and the experience level of the bank agent, demonstrating that a data-driven approach can enhance the effectiveness of telemarketing campaigns.
+Leveraging consumer data can help financial institutions better understand the key factors driving the success of their marketing campaigns. Our project utilizes a marketing dataset from a Portuguese banking institution and aims to identify the factors that influence the likelihood of subscribing to term deposits during a telemarketing campaign.
+
 
 \newpage
 
@@ -70,6 +76,17 @@ The Mobile Marketing Association defines telemarketing as, “A set of practices
 ## Descriptive Statistics
 
 ## Exploratory Analysis
+
+## MICE
+
+In our dataset, multiple variables have missing values (job, marital, education, default, housing and loan). Missing data can introduce bias and taints the accuracy of the results. We assumed that our missing values are missing at random (MAR) meaning the probability that a value is missing depends only on observed values and not on unobserved ones, i.e. after controlling of available data “any remaining missingness is completely random” (Graham 2009). To address this issue, we used the Multiple Imputation by Chained Equations (MICE) technique. MICE uses the relationships between variables to generate imputations that reflect the missing patterns. It creates multiple completed datasets by imputing plausible values for missing entries, allowing for unbiased estimation and proper inference.
+The MICE procedure works by iteratively imputing each incomplete variable using a model that conditions on all other variables. The process involves three main steps. 
+
+\begin{enumerate}
+\item Imputation Phase: Each variable that has missing values is imputed conditionally on the other variables. MICE works by regressing each variable with missing values on all the other variables, using the available (non-missing) data. Then, missing values are predicted (and imputed) based on that model. This process is repeated for every variable with missing data, one after the other.
+\item Iteration Phase : The Imputation cycle is repeated several times to allow the values to converge. Typically, 10 cycles are performed (Raghunathan et al., 2002). The result of each cycle is a single imputed dataset. 
+\item Pooling : The imputation process is repeated m times, resulting in m complete datasets. Following, literature, we repeated the imputation process 5 times (m=5). Indeed, Bennet (2001) recommends repeating the imputation process between 5 and 10. Hawthorne and Elliott (2005) claim m value should be usually less than 10. Royston et al. (2009) recommend choosing m=3 or m=5. Other research (Graham and al 2007) recommends increasing the number of imputed datasets up to 40. However, in practice, imputing a large number of datasets is not feasible. The m imputed datasets are then pooled together using Rubin’s rule. 
+\end{enumerate}
 
 \newpage
 
@@ -86,6 +103,82 @@ This DAG also includes variables related to previous campaign such as the number
 
 
 ## Econometrics and Machine Learning
+
+Double/Debiased Machine Learning (DDML) is a method used to estimate causal effects in situations where we have many variables and possibly complex relationships between them. It combines ideas from machine learning and econometrics to give more accurate and reliable estimates. It was introduced by by Chernozhukov et al. (2018). 
+We use DDML to estimate the causal effect of a treatment or policy variable on an outcome of interest, while controlling for high-dimensional confounders. In such settings, classical parametric methods may fail if the true relationships are nonlinear or if the relevant control variables are unknown or numerous. Machine learning methods can flexibly model these complex relationships, but they often introduce regularization bias and do not provide valid inference for causal parameters.
+This method relies on two key principales : Neyman orthogonoality that removes the influence of control variables on both the treatment and the outcome, reducing bias ; and cross-fitting that avoids over-fitting by using different parts of the data to estimate the control functions and the final effect. 
+
+We are interested in the two most common models estimated via DDML : the Partially Linear Model (PLM) and the Interactive Regression Model (IRM). 
+
+First, we will explain the Partially Linear Model. The estimation model for the Partially Linear model is:
+\begin{equation}
+    Y = \theta_0 D + g_0(X) + U
+\end{equation}
+where $\theta_0$ is the parameter of interest, the causal effect of $D$ on $Y$. An important feature is that the controls $X$ enter through an unknown and potentially non-linear function $g_0$. The conditional orthogonality is a key identifying assumption.
+\begin{equation}
+    \mathbb{E}[\text{Cov}(U, D \mid X)] = 0
+\end{equation}
+
+Let $\ell_0(X) = \mathbb{E}[Y \mid X]$ and $m_0(X) = \mathbb{E}[D \mid X]$ denote the conditional expectation functions. Then, under mild conditions, the target parameter $\theta_0$ satisfies the moment condition:
+
+\begin{equation}
+\theta_0 = \frac{\mathbb{E} \left[ (Y - \ell_0(X))(D - m_0(X)) \right]}{\mathbb{E} \left[ (D - m_0(X))^2 \right]}.
+\label{eq:theta_plm}
+\end{equation}
+
+
+The DDML estimator proceeds in two steps:
+\begin{enumerate}
+    \item Estimate the nuisance functions $\ell_0(X)$ and $m_0(X)$ using flexible machine learning methods (e.g., lasso, random forest, boosting).
+    \item Plug in the predicted values to residualize $Y$ and $D$, and compute $\hat{\theta}_n$ as the sample analogue of Equation~\eqref{eq:theta_plm}, using cross-fitting to reduce overfitting bias.
+\end{enumerate}
+
+Cross-fitting involves splitting the sample into $K$ folds, estimating nuisance functions on one fold and evaluating on the other. This leads to a DDML estimator of the form:
+
+\begin{equation}
+\hat{\theta}_n = \frac{ \frac{1}{n} \sum_{i=1}^{n} (Y_i - \hat{\ell}^{-i}(X_i))(D_i - \hat{m}^{-i}(X_i)) }{ \frac{1}{n} \sum_{i=1}^{n} (D_i - \hat{m}^{-i}(X_i))^2 },
+\label{eq:ddml_estimator_plm}
+\end{equation}
+
+where $\hat{\ell}^{-i}(X_i)$ and $\hat{m}^{-i}(X_i)$ denote cross-fitted predictions (i.e., predicted using data not including observation $i$). \\
+
+We will move on to the Interactive Regression Model. The Interactive Regression Model allows for a fully flexible relationship between the treatment and the covariates. It is given by:
+
+\begin{equation}
+Y = g_0(D, X) + U,
+\label{eq:irm}
+\end{equation}
+
+where $D \in \{0,1\}$ is a binary treatment. With IRM, compared to PLM, $D$ must be a scalar binary variable and $D$ is not required to be additively separable from the controls $X$. 
+
+We are interested in two key causal parameters:
+\begin{align}
+\theta_0^{ATE} &= \mathbb{E}[g_0(1, X) - g_0(0, X)], \label{eq:ate} \\
+\theta_0^{ATET} &= \mathbb{E}[g_0(1, X) - g_0(0, X) \mid D = 1]. \label{eq:atet}
+\end{align}
+
+Identification requires the two following assumptions:
+\begin{itemize}
+    \item \textbf{Conditional Mean Independence:} $\mathbb{E}[U \mid D, X] = 0$
+    \item \textbf{Overlap:} $\mathbb{P}(D = 1 \mid X) \in (0,1)$with probability 1.
+\end{itemize}
+
+Let $g_0(d, X) = \mathbb{E}[Y \mid D = d, X]$ and $m_0(X) = \mathbb{E}[D \mid X]$ be the nuisance functions. Then, the efficient influence function for the ATE is:
+
+\begin{equation}
+\psi^{ATE}(W) = \frac{D(Y - g(1, X))}{m(X)} - \frac{(1 - D)(Y - g(0, X))}{1 - m(X)} + g(1, X) - g(0, X) - \theta,
+\label{eq:psi_ate}
+\end{equation}
+
+and the DDML estimator solves the moment condition:
+
+\begin{equation}
+\frac{1}{n} \sum_{i=1}^n \psi^{ATE}(W_i; \hat{g}, \hat{m}) = 0 \quad \Rightarrow \quad \hat{\theta}_n^{ATE}.
+\label{eq:ddml_estimator_ate}
+\end{equation}
+
+As with the PLM, the nuisance functions are estimated using machine learning with cross-fitting. This ensures the orthogonality property holds and provides robustness to regularization bias and overfitting.
+
 
 \newpage
 
