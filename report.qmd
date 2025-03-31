@@ -79,6 +79,12 @@ The Mobile Marketing Association defines telemarketing as, “A set of practices
 
 ## DAG and Hypothesis
 
+The directed acyclic graph (DAG) below represents the assumed causal structure in the context of a telemarketing campaign promoting term deposits. The goal is to understand the effect of the time of the call (defined by the day of the week and month) on the likelihood of subscribing to a term deposit. 
+In this DAG, we have two sets of exogeneous variables: the set of individual socioeconomic variables encompassing job, marital status or education and the set of variables related to the state of the economy including employment rate, consumer price and confidence indexes for example. These exogeneous variables influence the outcome but also influence the duration and/or time of the call. For example, your job can influence when you are available to pick-up the phone or to call back the banking institution. 
+The variable duration is also very important in terms of causality. The duration of the call obviously impacts the outcome of the call: if the call is very short, the probability that the client subscribed to the product is close to zero and the probability of the outcome being yes increases with the duration of the call. The treatment variable has an impact on the duration of the call. Depending on the moment of the day or the month, people may be more on less busy (work, holidays, …) and the duration of the call may differ. Other variables impact the duration of the call as the number of calls performed during the campaign and the exogeneous variables. 
+This DAG also includes variables related to previous campaign such as the number of calls performed in previous campaign and the outcome of previous campaign. These variables impact both the number of calls performed in this campaign and the outcome of the present campaign. 
+
+
 ## Econometrics and Machine Learning
 
 \newpage
