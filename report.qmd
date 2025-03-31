@@ -194,19 +194,350 @@ DATA_ADD_FULL |>
 
 # Methodology and Objectives
 
+The objective of this project is to estimate the causal effect of our treatment of study. We consider three experiments.
+
+First, we consider seek to estimate the causal effect of being contacted in the middle of the week by the bank, versus another day. We hypothesis there is a positive causal effect to calling people not on Mondays nor on Fridays, because the beginning of the week is often associated with rush and catching-up on previous week's work , while the end of the week is associated with meeting deadlines before the weekend. Thus,  someone called in the middle of the weeks is more inclined to accept the term deposit product.
+
+Second and relatedly, we are interested in the effect of being contacted at the end of the month, versus at the beginning. The reasoning is that at the beginning of the month, people often have more cash at hand from their revenue (assumed to be received towards the end of the month) and is thus more inclined to accept the deposit.
+
+In a third experiment, we are interested in the effect of the Euro Interbank Offered Rate (Euribor) on the probability of take-up. Since interest rates on term deposits react quickly to the Euribor, they reflect the rate set by the European Central Bank. Based on this observation, we hypothesise that customers reached when the Euribor is high have a higher probability of subscribing to the term deposit. 
+
+
+## Data pre-processing
+
+In this section we detail the steps occuring in our data preprocessing pipeline.
+
+Some variables are numeric such as pdays (the number of days since called from a previous campaign) but take special values for some cases. For instance, pdays = 999 if the person was never contacted from a preivous campaign, but is otherwise = 1, 2, ... 26. 
+
+```{r}
+# pdays (nb days since called from a previous campaign)
+pdays = DATA_ADD_FULL$pdays
+pdays = pdays[pdays != 999]
+
+# Plot histogram of pdays
+hist(pdays, breaks = seq(min(pdays), max(pdays)),
+     main = "Histogram of pdays (Bin size = 5)",
+     xlab = "Values", 
+     col = "skyblue", 
+     border = "black")
+
+summary(pdays) 
+
+#  we transform pdays into a categorical variable, with 3 categories:
+# never called (previously 999)
+# called less than or equal to 6 days ago (the median)
+# called more than 6 days ago
+DATA_ADD_FULL$pdays <- as.factor(ifelse(DATA_ADD_FULL$pdays == 999, 
+                                  "Never Contacted",
+                                  ifelse(DATA_ADD_FULL$pdays <= 6, 
+                                         "<=6 days ago", 
+                                         ">6 days ago")))
+str(DATA_ADD_FULL$pdays)
+
+```
+
+In order to achieve unconfoundedness, that is random assignment of the treatment conditional on covariates, we only consider observations for which campaign = 1, that is contacted only once during the present campaign. Indeed, campaign > 1 means that someone has requested to reschedule the call for later. This poses an issue of self-selection into the treatment if we consider our experiment where being treated means  being contacted during the middle of the week, as people may reschedule a call next Wednesday for instance, if  they expect to be less busy.  
+
+
+```{r}
+# keep only observation called once to ensure treatment is random given covariates
+dataset = dataset %>% filter(campaign == 1)
+dataset <- subset(dataset, select = -campaign)
+
+```
+
+We convert date_month from date to factor in order create dummies for our models.
+
+```{r}
+# convert date_month to categorical
+dataset$date_month = as.factor(dataset$date_month) 
+```
+
+Finally we look at outcome imbalance. We find a majority of "no" (around 85\%) but we consider the imbalance as not too severe and therefore proceed without attempting to mitigate this imbalance.  
+
+```{r}
+# imbalanced outcome
+prop.table(table(dataset$outcome))
+```
+
 \newpage
 
-# Weekdays
+# Mid-week calls
 
-As previously mentionned, there may be evidence that a call in the middle of the week increase take-up.
+During preliminary data exploration, we have identified an association between being called in the middle of the week and the probability of accepting the term deposit. We suspect a positive causal effect, and investigate in this section.
+
+First we look at covariate balance, to check if treatment is assigned evenly across the treatment and control groups. We find that for numeric variables, control and treatment groups have similar standardised means, and similarly, categorical variables have roughly the same share of people across of their categories in the control and treatment groups. This allows us to conclude that the distribution of treatment is quite balanced across control and treatment groups, and that we can proceed safely with our models.
+
+```{r}
+
+# Covariate Balance Table: checking
+covariates = colnames(dataset)[colnames(dataset) != "treatment"]
+covariates = covariates[covariates != "outcome"]
+
+table1 <- CreateTableOne(vars = covariates, strata = "treatment", data = dataset, test = FALSE)
+print(table1, smd = TRUE)
+
+# distribution of treatment is quite balanced across control and treatment groups
+# we can proceed safely with logit
+
+```
 
 ## PICO process
 
+
+**Population**: Customers from a Portuguese bank, who are called as part of a telemarketing campaign for a term deposit product
+
+**Intervention**: Receiving a call during the middle of the week (Tue, Wed, Thur)
+
+**Comparison**: Customers called a Monday or Friday
+
+**Outcome**: Subscribing or not to the term deposit
+
+**Time**: Outcome is determined after the call ends (directly after treatment)
+
 ## DAG and Hypothesis
+
+Importantly, since $duration$ (the duration of the last call) is only recorded after the end of the call, that is after the outcome is known, we classify it as a collider or post-treatment variable. Therefore, we drop it from our covariates list.
+
+```{r}
+# removing post-treatment variables
+dataset <- subset(dataset, select = -duration)
+```
+
+## Models
+
+The models we consider are the logit, the Augmented IPW, 
+
+Our set of controls therefore include all socio-demographic variables, month dummies from May 2008 until November 2010, and macro variables (from the original  dataset + added ones).
+
+### Logit 
+
+We use the Logit as a benchmark for the rest of our models.
+
+
+```{r}
+###################################################### LOGIT
+
+# Strategy: incorporate month dummies and remove all macro variables
+# to prevent instability of coefficients due to correlation
+# Month dummies capture economic recovery, and any effect related to the current state of the world in Portugal at the time of the call
+data_logit <- subset(dataset, select = - c(euribor_12mo, hicp, cons_confidence, unemployment, stoxx_return))
+str(data_logit)
+
+logit_model <- glm(outcome ~ treatment + .,
+                   data = data_logit, family = binomial)
+```
+
+### Augmented IPW
+
+Then we experiment with the AIPW estimator or doubly robust learning estimator. This estimator combines the G-formula (conditional mean regression) and the IPW (where the outcome is  weighted by the inverse of the propensitiy score), and only requires one to be well-specified. 
+```{r}
+
+################################################### AIPW
+str(data_logit)
+
+data_ipw = data_logit
+W = subset(data_logit, select = -c(outcome, treatment))
+X_numeric <- model.matrix( ~ . - 1, data = W)  # "-1" removes the intercept column
+str(X_numeric)
+
+
+#create an object
+aipw_sl <- AIPW$new(Y=data_logit$outcome, 
+                    A=data_logit$treatment,
+                    W=X_numeric,
+                    Q.SL.library = c("SL.glm", "SL.mean"),
+                    g.SL.library = c("SL.glm", "SL.mean"),
+                    k_split=10,verbose=TRUE)
+#fit the object
+aipw_sl$stratified_fit()
+```
 
 ## Results 
 
+The logit is a  benchmark for our ML models.
+
+We find a coefficient of 0.21 significant at 0.001%. To validate our model and make sure overfit is not an issue, we assess the performance of our binary classifier with the ROC curve and the AUC metric. $Sensitivity$ is the true-positive rate while $1-specificity$ is the false positive rate. We find and an AUC of 0.82 indicating high predictive performance, confirming overfitting is not an issue.
+
+Our coefficient for $treatment$ translates into an average marginal effect of 0.0198.
+
+```{r}
+###################################################### LOGIT
+# Print summary of the model
+summary(logit_model)
+exp(coef(logit_model))
+
+# Analysis of results
+pred_logit <- predict(logit_model, data = dataset, type = "response")
+
+# Generate ROC Curve and calculate AUC
+roc_obj <- roc(dataset$outcome, pred_logit)
+auc_value <- auc(roc_obj)
+
+# Generate Confidence Interval
+ci_obj <- ci.auc(roc_obj)
+print(paste("AUC Confidence Interval:", round(ci_obj[1], 3), "-", round(ci_obj[3], 3)))
+
+# Plotting the ROC Curve with ggplot
+ggplot() +
+  geom_line(aes(x = 1-roc_obj$specificities, y = roc_obj$sensitivities), color = "blue", size = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = paste("ROC Curve (AUC =", round(auc_value, 3), 
+                     "with CI:", round(ci_obj[1], 3), "-", round(ci_obj[3], 3), ")"),
+       x = "1 - Specificity",
+       y = "Sensitivity") +
+  theme_minimal()
+
+# Comment on the results
+# The coefficient on treatment is significant at the 0.001% confidence level
+# 
+# The area under the curve is around 0.8 which reveals that the model is good and 
+# is able to discriminate between individuals subscribing upon treatment and those who do not
+
+
+######################### ATE ########################################
+
+
+# Average Marginal Effect
+ame <- margins(logit_model, variables = "treatment")
+summary(ame)
+```
+
+
+Next we show the ATE found by the AIPW estimator.
+
+We find an ATE (Risk difference between the treated and control groups) of 
+
+To compare the ATE, we compare the AME from the logit and the risk difference from the AIPW. We find that the estimators find treatment effects in the same zone, around 0.2.
+That is, someone called in the middle of the week is 0.2 percentage point more likely to subscribe to the term deposit.
+
+```{r}
+
+################################################### AIPW
+#calculate the results
+aipw_sl$summary(g.bound = 0.025)
+#check the propensity scores by exposure status after truncation
+aipw_sl$plot.p_score()
+print(aipw_sl$result, digits = 5)
+
+# recompute LOGIT coefficient
+# Values from your output
+p0 <- aipw_sl$result["Risk of control", "Estimate"]  # Risk under control
+att_rd <- aipw_sl$result["ATT Risk Difference", "Estimate"]
+p1 <- p0 + att_rd
+
+# Compute odds
+odds0 <- p0 / (1 - p0)
+odds1 <- p1 / (1 - p1)
+
+# Compute odds ratio and logit coefficient
+or <- odds1 / odds0
+logit_coef <- log(or)
+
+# Output
+cat("Implied OR:", round(or, 4), "\n")
+cat("Implied Logit Coefficient (log OR):", round(logit_coef, 4), "\n")
+
+
+## plot 
+# From logistic regression
+logit_est <- coef(logit_model)["treatment"]
+logit_se <- summary(logit_model)$coefficients["treatment", "Std. Error"]
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
+
+# From AIPW - let's say you’re comparing log OR
+# Use your actual values here
+aipw_log_or <- log(aipw_sl$result["Odds Ratio", "Estimate"])  # OR from AIPW output
+aipw_se <- aipw_sl$result["Odds Ratio", "SE"] / aipw_sl$result["Odds Ratio", "Estimate"]  # Delta method: SE(log OR) ≈ SE(OR) / OR
+aipw_lower <- aipw_log_or - 1.96 * aipw_se
+aipw_upper <- aipw_log_or + 1.96 * aipw_se
+
+# Create comparison data frame
+df <- tibble(
+  method = c("Logit", "AIPW"),
+  estimate = c(logit_est, aipw_log_or),
+  lower = c(logit_lower, aipw_lower),
+  upper = c(logit_upper, aipw_upper)
+)
+
+# Plot
+ggplot(df, aes(x = method, y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15) +
+  labs(title = "Treatment Effect (log OR): Logit vs AIPW",
+       y = "Log Odds Ratio", x = "") +
+  theme_minimal()
+
+## Marginal effects
+# 1. Extract marginal effect for "treatment" from logit model
+ame_summary = summary(ame)
+logit_marginal <- ame_summary[ame_summary$factor == "treatment", ]
+logit_est <- logit_marginal$AME
+logit_se <- logit_marginal$SE
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
+
+# 2. Extract AIPW Risk Difference (ATE) from your object
+aipw_result <- aipw_sl$result
+aipw_rd_row <- aipw_result["Risk Difference", ]
+aipw_est <- aipw_rd_row["Estimate"]
+aipw_se <- aipw_rd_row["SE"]
+aipw_lower <- aipw_est - 1.96 * aipw_se
+aipw_upper <- aipw_est + 1.96 * aipw_se
+
+# 3. Combine into a tidy data frame
+df_plot <- tibble(
+  Method = c("Logit AME", "AIPW Risk Difference"),
+  Estimate = c(logit_est, aipw_est),
+  Lower = c(logit_lower, aipw_lower),
+  Upper = c(logit_upper, aipw_upper)
+)
+
+# 4. Plot
+ggplot(df_plot, aes(x = Method, y = Estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.15) +
+  labs(title = "Average Treatment Effect",
+       y = "ATE (Probability Scale)", x = "") +
+  theme_minimal()
+
+```
+
+
 ## Heterogeneity Analysis
+
+The logit finds that the treatment effect is particularly large and significant for  retired people and students, among the bank's customer base. This finding is opposite that what we hypothesised, meaning that it is in fact people for whom work does not necessarily need to be delivered on Fridays or to be caught up on Mondays that react more positively to the call.
+
+```{r}
+
+# Heterogeneous
+marital_ame <- margins(logit_model, variables = "treatment", at = list(marital = c("married", "single")))
+summary(marital_ame)
+
+me_by_job <- margins(logit_model, variables = "treatment", at = list(job = unique(data_logit$job)))
+me_by_job = summary(me_by_job)
+
+# plot 
+
+me_df <- as.data.frame(me_by_job)
+me_df$lower <- me_df$AME - 1.96 * me_df$SE
+me_df$upper <- me_df$AME + 1.96 * me_df$SE
+
+ggplot(me_df, aes(x = reorder(job, AME), y = AME)) +
+  geom_point(size = 2) +  # Point estimate
+  geom_linerange(aes(ymin = lower, ymax = upper), size = 0.6) +  # CI bounds
+  coord_flip() +  # Horizontal layout
+  labs(
+    x = "Job Category",
+    y = "Marginal Effect of Treatment (AME)",
+    title = "Heterogeneous Treatment Effect by Job"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+```
+
 
 ```{r, fig.align='center', fig.height=4, fig.width=7.25, message=FALSE, warning=FALSE, fig.cap="Change in take-up in middle of the week"}
 WEEKDAYS_results <- read_feather("results_analysis/weekdays_causal_forest.feather")
@@ -223,11 +554,201 @@ WEEKDAYS_results |>
   geom_hline(yintercept = 0, linetype="dotted")
 ```
 
+## Robustness checks
+
+We want to ensure that the treatment effects we find are not too sensitive to covariate choice.
+
+### Logit
+
+We run an experiment on the Logit by dropping month dummies and instead using our macro variables. We find a similar coefficient on $treatment$, also significant at the 1\% level.
+
+Next we turn to including all covariates, including month dummies and all macro variables. Our estimates remain robust to this addition.
+```{r}
+
+
+### ##################################################
+#ROBUSTNESS
+##################################################
+
+
+###################################################### Logit without month dummies but with macro 
+
+data_logit <- subset(dataset, select = - c(date_month))
+str(data_logit)
+
+# Run logistic regression
+# we put date_month as factor to act as month fixed effects, thereby capturing
+# economic recovery, and any effect related to the current state of the world in 
+# Portugal at the time of the call
+logit_model <- glm(outcome ~ treatment + .,
+                   data = data_logit, family = binomial)
+
+# Print summary of the model
+summary(logit_model)
+exp(coef(logit_model))
+
+# Analysis of results
+pred_logit <- predict(logit_model, data = dataset, type = "response")
+
+# Generate ROC Curve and calculate AUC
+roc_obj <- roc(dataset$outcome, pred_logit)
+auc_value <- auc(roc_obj)
+
+# Generate Confidence Interval
+ci_obj <- ci.auc(roc_obj)
+print(paste("AUC Confidence Interval:", round(ci_obj[1], 3), "-", round(ci_obj[3], 3)))
+
+# Plotting the ROC Curve with ggplot
+ggplot() +
+  geom_line(aes(x = 1-roc_obj$specificities, y = roc_obj$sensitivities), color = "blue", size = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = paste("ROC Curve (AUC =", round(auc_value, 3), 
+                     "with CI:", round(ci_obj[1], 3), "-", round(ci_obj[3], 3), ")"),
+       x = "1 - Specificity",
+       y = "Sensitivity") +
+  theme_minimal()
+
+############################################# logit with all covariates
+data_logit <- dataset
+logit_model <- glm(outcome ~ treatment + .,
+                   data = data_logit, family = binomial)
+
+# Print summary of the model
+summary(logit_model)
+exp(coef(logit_model))
+
+```
+
+### AIPW
+
+We also run an experiment on the AIPW where we drop month dummies to include macro variables. This yields very similar treatment effect estimates.
+```{r}
+####################################################  AIPW without month dummies with macro
+data_logit <- subset(dataset, select = - c(date_month))
+str(data_logit)
+
+data_ipw = data_logit
+W = subset(data_logit, select = -c(outcome, treatment))
+X_numeric <- model.matrix( ~ . - 1, data = W)  # "-1" removes the intercept column
+str(X_numeric)
+
+
+#create an object
+aipw_sl <- AIPW$new(Y=data_logit$outcome, 
+                    A=data_logit$treatment,
+                    W=X_numeric,
+                    Q.SL.library = c("SL.glm", "SL.mean"),
+                    g.SL.library = c("SL.glm", "SL.mean"),
+                    k_split=10,verbose=TRUE)
+#fit the object
+aipw_sl$stratified_fit()
+#calculate the results
+aipw_sl$summary(g.bound = 0.025)
+#check the propensity scores by exposure status after truncation
+aipw_sl$plot.p_score()
+print(aipw_sl$result, digits = 5)
+
+# recompute LOGIT coefficient
+# Values from your output
+p0 <- aipw_sl$result["Risk of control", "Estimate"]  # Risk under control
+att_rd <- aipw_sl$result["ATT Risk Difference", "Estimate"]
+p1 <- p0 + att_rd
+
+# Compute odds
+odds0 <- p0 / (1 - p0)
+odds1 <- p1 / (1 - p1)
+
+# Compute odds ratio and logit coefficient
+or <- odds1 / odds0
+logit_coef <- log(or)
+
+# Output
+cat("Implied OR:", round(or, 4), "\n")
+cat("Implied Logit Coefficient (log OR):", round(logit_coef, 4), "\n")
+
+
+## plot 
+# From logistic regression
+logit_est <- coef(logit_model)["treatment"]
+logit_se <- summary(logit_model)$coefficients["treatment", "Std. Error"]
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
+
+# From AIPW - let's say you’re comparing log OR
+# Use your actual values here
+aipw_log_or <- log(aipw_sl$result["Odds Ratio", "Estimate"])  # OR from AIPW output
+aipw_se <- aipw_sl$result["Odds Ratio", "SE"] / aipw_sl$result["Odds Ratio", "Estimate"]  # Delta method: SE(log OR) ≈ SE(OR) / OR
+aipw_lower <- aipw_log_or - 1.96 * aipw_se
+aipw_upper <- aipw_log_or + 1.96 * aipw_se
+
+# Create comparison data frame
+df <- tibble(
+  method = c("Logit", "AIPW"),
+  estimate = c(logit_est, aipw_log_or),
+  lower = c(logit_lower, aipw_lower),
+  upper = c(logit_upper, aipw_upper)
+)
+
+# Plot
+ggplot(df, aes(x = method, y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15) +
+  labs(title = "Treatment Effect (log OR): Logit vs AIPW",
+       y = "Log Odds Ratio", x = "") +
+  theme_minimal()
+
+## Marginal effects
+# 1. Extract marginal effect for "treatment" from logit model
+ame_summary = summary(ame)
+logit_marginal <- ame_summary[ame_summary$factor == "treatment", ]
+logit_est <- logit_marginal$AME
+logit_se <- logit_marginal$SE
+logit_lower <- logit_est - 1.96 * logit_se
+logit_upper <- logit_est + 1.96 * logit_se
+
+# 2. Extract AIPW Risk Difference (ATE) from your object
+aipw_result <- aipw_sl$result
+aipw_rd_row <- aipw_result["Risk Difference", ]
+aipw_est <- aipw_rd_row["Estimate"]
+aipw_se <- aipw_rd_row["SE"]
+aipw_lower <- aipw_est - 1.96 * aipw_se
+aipw_upper <- aipw_est + 1.96 * aipw_se
+
+# 3. Combine into a tidy data frame
+df_plot <- tibble(
+  Method = c("Logit AME", "AIPW Risk Difference"),
+  Estimate = c(logit_est, aipw_est),
+  Lower = c(logit_lower, aipw_lower),
+  Upper = c(logit_upper, aipw_upper)
+)
+
+# 4. Plot
+ggplot(df_plot, aes(x = Method, y = Estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.15) +
+  labs(title = "Average Treatment Effect",
+       y = "ATE (Probability Scale)", x = "") +
+  theme_minimal()
+
+```
+
+
+
 \newpage
 
 # Time of the month
 
 ## PICO process
+
+**Population**: Customers from a Portuguese bank, who are called as part of a telemarketing campaign for a term deposit product
+
+**Intervention**: Receiving a call at the end of the month (after the 16th of each month)
+
+**Comparison**: Customers called a Monday or Friday
+
+**Outcome**: Subscribing or not to the term deposit
+
+**Time**: Outcome is determined after the call ends (directly after treatment)
 
 ## DAG and Hypothesis
 
@@ -284,7 +805,7 @@ The directed acyclic graph below summarizes the primary causal relationships ass
 
 Under the structure outlined in the DAG, the lagged interest rate at period $t-1$ can be considered a valid instrument, provided that variables influenced by this rate are appropriately controlled for. The intuition behind this instrument is based on interest rate stickiness: financial products are often priced based on previously observed rates, while current market rates reflect present expectations rather than past ones. Therefore, contemporaneous demand shocks can be assumed to be uncorrelated with lagged interest rates.
 
-This type of instrument and identification strategy is well-established in the macroeconomic literature. However, the exogeneity of the instrument cannot be formally tested. The absence of strong alternative instruments in our dataset rule out the possibility of conducting over-identification tests such as the Sargan–J test.
+This type of instrument and identification strategy is well-established in the macroeconomic literature. However, the exogeneity of the instrument cannot be formally tested. The absence of strong alternative instruments in our DATA_ADD_FULL rule out the possibility of conducting over-identification tests such as the Sargan–J test.
 
 ## Results 
 
