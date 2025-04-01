@@ -1,3 +1,7 @@
+# Title: Macro Econ
+# Description: Aim to estimate effects of the interest rate on take-up
+
+# Library imports ----
 library(arrow)
 library(tidyverse)
 library(data.table)
@@ -9,12 +13,10 @@ library(mlr3learners)
 library(paradox)
 library(mlr3tuning)
 library(margins)
-library(future)
 library(gmm)
 set.seed(21457912)
 
 plan(multisession, workers = parallel::detectCores(logical = FALSE))
-
 
 ## Data prep ----
 DATA_ADD_FULL <- read_feather("results_building/bank-additional-full.feather")

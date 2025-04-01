@@ -36,6 +36,8 @@ format:
           \usepackage[normalem]{ulem}
           \usepackage{times}
           \usepackage{sectsty}
+          \usepackage[backend=biber, url=false, style=authoryear, sorting=ydnt]{biblatex}
+          \addbibresource{ressources/deposit-detective.bib}
           \usepackage{ressources/tikz/tikzit}
           \input{ressources/tikz/tikz.tikzstyles}
           \newcommand{\ts}{\textsuperscript}
@@ -59,8 +61,17 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 \clearpage
 
-# Introduction and Relevant Literature
+# Introduction and Research Question
 
+Telemarketing, as defined by the Mobile Marketing Association, involves practices that enable organizations to engage interactively and relevantly with audiences via mobile devices or networks. In the banking sector, telemarketing has been widely utilized since the 1980s due to its cost-efficiency and capacity for personalized customer engagement. Banks established call centers and developed consumer databases to transition away from reliance on in-person sales, enabling targeted promotion of products such as loans, credit cards, and term deposits.
+
+The adoption of telemarketing is driven by several factors, including higher conversion rates compared to mass marketing, rapid customer outreach capabilities, and ease of campaign performance monitoring. However, challenges persist, such as low response rates, customer fatigue, and negative perceptions associated with unsolicited calls. A significant challenge for institutions remains accurately identifying customers likely to subscribe to specific products.
+
+The complexity of telemarketing campaigns makes identifying key success drivers difficult. \cite{rasool_basha_study_2024} emphasizes factors such as telemarketer skills, call list quality, and call timing. Data-driven approaches offer substantial improvements to telemarketing strategies. For instance, \cite{moro_data-driven_2014} analyzed a Portuguese banking dataset to predict telemarketing success rates for term deposit sales. Their study indicated neural networks provided superior predictive accuracy and identified critical predictive factors, including the Euribor rate, call direction (inbound or outbound), and bank agent experience.
+
+Building upon the aforementioned contribution, this report adopts a causal analysis framework to evaluate the impact of timing on telemarketing success rates within the banking industry. Answering the question of what is the best time to reach out to a potential client enbables for a more informed decisions of resource allocation.
+
+Recent advancements in causal machine learning, particularly the Double Machine Learning (DML) methodology introduced by \cite{chernozhukov_doubledebiased_2018}, facilitate addressing causal questions using machine learning tools already familiar within predictive analytics. Consequently, this study seeks to compare and evaluate various methods for identifying causal effects in the context of telemarketing campaign optimization.
 
 \newpage
 
@@ -68,23 +79,41 @@ knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
 
 ## Marketing Campaign
 
+Our primary dataset originates from \cite{moro_data-driven_2014}, who analyzed data obtained from a bank marketing campaign conducted by a Portuguese bank between 2008 and 2010. The campaign focused on selling term deposits to clients, during a period when the bank did not utilize predictive marketing techniques. The dataset allowed the authors to assess which individuals should be prioritized in marketing efforts.
+
+The dataset comprises approximately 40,000 observations and includes over 20 variables, containing more than 80 features. It encompasses demographic details such as educational levels and employment statuses, financial indicators like loan status, account balances, or defaults, as well as methodological aspects such as contact methods and historical engagement with previous campaigns. Additionally, we complemented the dataset with Portuguese macroeconomic indicators sourced from publicly available data from institutions like the World Bank or Eurostat.
+
+It is important to note that our version of the dataset differs from the original used by \cite{moro_data-driven_2014}. Our dataset is smaller, censored, and does not contain the full range of individual-level details due to privacy concerns. Additionally, the data is not in a panel structure.
+
 \begin{figure}
 \centering
 \caption{Campaign Process and Observed Data}
 \tikzfig{ressources/tikz/fig1}
 \end{figure}
 
+This dataset records only the final successful interaction with each individual. For instance, if an individual was contacted multiple times, we observe only the outcome of their last interaction. We also do not have direct access to the bank's client dataset. This presents an identification challenge, as individuals who were recontacted after an initial rejection differ, possibly due to unobservable factors (e.g., requested new contact), from those who were contacted only once.
+
 
 \newpage
+
 ## Descriptive Statistics
+
+We present descriptive statistics to provide insights into the characteristics of our dataset.
 
 ```{r}
 count_prop <- function(DATA){
   DATA |> summarise(`Count` = n()) |>
   mutate(`Share (%)` = `Count`/sum(`Count`) * 100)
 }
-```
 
+knitr_counts <- function(DATA){
+  DATA |>
+    knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 2, align = "c") |>
+    kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+    kableExtra::column_spec(1, width = "4.5cm") |>
+    kableExtra::column_spec(2:3, width = "2.5cm")
+}
+```
 
 
 ```{r}
@@ -94,16 +123,15 @@ DATA_FULL <- read_feather("results_building/bank-full.feather")
 ```
 
 ```{r}
+#| tbl-cap: "Observed Outcomes"
+
 DATA_ADD_FULL |>
   group_by(Outcome = outcome) |>
   count_prop() |>
-  knitr::kable(digits = 2, align = "c", caption = "Observed Outcomes")
+  knitr_counts()
 ```
 
-
-
-
-
+Firstly, we observe that the outcome variable is significantly imbalanced, exhibiting a failure rate of approximately 89%. Additionally, as previously noted, individuals who receive multiple contacts demonstrate a decreasing probability of acceptance with each subsequent call.
 
 ```{r, fig.cap= "Probability of sucess and number of calls", fig.height=3.5, fig.width=5.5}
 DATA_ADD_FULL |>
@@ -124,6 +152,7 @@ DATA_ADD_FULL |>
   scale_fill_brewer(palette = "Blues")
 ```
 
+However, it is important to highlight that nearly half of the observations consist of individuals contacted only once. This initial contact should remain unaffected by unobserved confounders. Consequently, our analysis will primarily focus on these first-contact interactions.
 
 ```{r, fig.cap= "Number of observed last calls", fig.height=3.5, fig.width=5.5}
 DATA_ADD_FULL |>
@@ -141,7 +170,7 @@ DATA_ADD_FULL |>
   scale_fill_brewer(palette = "Blues") 
 ```
 
-
+Examining the temporal distribution of the campaign, we find that marketing efforts were not evenly distributed over time. The majority of calls occurred early in the campaign, tapering off substantially towards 2010. This trend may reflect strategic shifts by the bank following the onset of the Great Financial Crisis, potentially driven by changes in interest rates affecting product profitability or consumer demand.
 
 ```{r, fig.cap= "Euribor 12mo rates", fig.height=3, fig.width=5.5}
 DATA_ADD_FULL |>
@@ -157,98 +186,337 @@ DATA_ADD_FULL |>
   labs(x= "", y= "Interest Rate (%)", caption = "Euribor data, 2008-2010")
 ```
 
+Nonetheless, the variation in interest rates over this period provides an opportunity to investigate their impact on take-up rates, which will be explored in details in the final section. A preliminary correlation analysis reveals, as anticipated, a negative correlation between the number of contacts and acceptance probability during the last contact.
 
-
-```{r,  fig.cap= "Euribor 12mo rates", fig.height=5, fig.width=5}
+```{r,  fig.cap= "\\vspace{-0.3cm} Correlations between numeric variables", fig.height=4, fig.width=4}
 numeric_data <- DATA_ADD_FULL |>
   select(where(is.numeric)) |>
-  select(-c(hicp, stoxx_return, cons_confidence, euribor_12mo, nr.employed, euribor3m, cons.conf.idx, cons.price.idx, emp.var.rate, mid_week))
+  select(-c(hicp, stoxx_return, cons_confidence, nr.employed, unemployment, euribor3m, cons.conf.idx, cons.price.idx, emp.var.rate, mid_week))
 
 cor_matrix <- cor(numeric_data)
-#corrplot(numeric_data_wo_na)
 ggcorrplot::ggcorrplot(cor_matrix, type = "lower")+
   theme(text=element_text(family = "Times"))
 ```
-
-
-\newpage
-## Exploratory Analysis
+\vspace{-0.3cm} space{-0.3cm} Furthermore, we observe a negative correlation between interest rates and acceptance rates. This relationship will be analyzed more comprehensively in the subsequent section but is likely indicative of demand shocks.
 
 ```{r}
-DATA_ADD_FULL |>
-  mutate(Share = if_else(y==1, "Sucess", "Failure"), day_of_week = factor(
-    day_of_week, 
-    levels = c("mon", "tue", "wed", "thu", "fri"), 
-    labels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
-  )) |>
-  group_by(day_of_week, Share) |>
-  summarise(cnt = n()) |>
-  mutate(prop = cnt/sum(cnt)) |>
-  ungroup() |>
-  select(-cnt) |>
-  pivot_wider(names_from = "day_of_week", values_from = "prop") |>
-  knitr::kable(digits = 3, align = "c", caption = "Share of sucessful calls")
+WEEKLY_SUCCESS <- DATA_ADD_FULL |>
+  mutate(
+    Share = if_else(y == 1, "Success", "Failure"),
+    day_of_week = factor(
+      day_of_week,
+      levels = c("mon", "tue", "wed", "thu", "fri"),
+      labels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+    )
+  ) |>
+  count(day_of_week, Share) |>
+  group_by(day_of_week) |>
+  mutate(prop = n / sum(n)) |>
+  ungroup()
+
+knitr::kable(
+  bind_rows(
+    WEEKLY_SUCCESS |>
+      select(-n) |>
+      pivot_wider(names_from = "day_of_week", values_from = "prop"),
+    WEEKLY_SUCCESS |>
+      group_by(day_of_week) |>
+      summarize(n = sum(n), .groups = "drop") |>
+      pivot_wider(names_from = "day_of_week", values_from = "n") |>
+      mutate(Share = "Count")
+  ),
+  digits = 3,
+  align = "c",
+  caption = "Share of successful calls"
+)
 ```
 
+Finally, the data indicates that the day of the week may influence the likelihood of a successful outcome.
+
+## Imputations (MICE)
+
+The dataset contains several "unknown" entries, however, given the significant reduction in sample size resulting from selecting only single-contact observations, further exclusion of data points is undesirable. Therefore, we opted to impute missing values.
+
+```{r}
+#| tbl-cap: "Number of 'unknown' observations"
+
+DATA_ADD_FULL |> 
+    filter(campaign==1) |>
+    summarise(across(where(is.character), ~ sum(.x=="unknown"))) |>
+    select(1:6) |>
+    knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 2, align = "c") |>
+    kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+    kableExtra::column_spec(1:6, width = "2cm") 
+  
+```
+
+
+Missing data can introduce bias and compromise the accuracy of results. We assume that the missing values follow a Missing at Random (MAR) pattern, meaning the probability of a value being missing depends solely on observed data rather than on unobserved variables. This means that after accounting for available data, "any remaining missingness is completely random." \parencite{graham_missing_2009}.  This permits the use of Multiple Imputation by Chained Equations (MICE), a method that models relationships between variables to generate plausible values that mirror observed patterns of missingness. The procedure can be summarized in three key phases:
+
+1. Imputation Phase: Each variable containing missing values is imputed based on other variables. MICE employs a regression-based approach, predicting missing values from observed data for each incomplete variable sequentially.
+2. Iteration Phase: The imputation step is iteratively repeated, typically around ten cycles, to allow for convergence of imputed values \parencite{raghunathan_what_2004}.
+3. Pooling Phase: The imputation procedure is performed multiple times (m iterations), resulting in several complete datasets. Following established guidelines, we chose to perform five imputation iterations (m = 6). This decision aligns with recommendations from \cite{bennett_how_2001}, suggesting that 5 to 10 iterations are appropriate. \cite{hawthorne_imputing_2005} similarly advocate for fewer than ten iterations, while \cite{sterne_multiple_2009} specifically recommend three or five iterations. 
+
+Regressions from each imputed dataset are combined using Rubin’s rules \parencite{rubin_multiple_1987}.
+
 \newpage
 
-# Methodology and Objectives
+# Methodology, Econometrics and Machine Learning
+
+To answer the question of best timing, we employ both traditional econometric methods, such as logistic regression, and advanced nonparametric machine learning techniques. Nonparametric ML approaches are particularly valuable as they effectively capture complex, highly nonlinear relationships. Specifically, we use Double/Debiased Machine Learning (DDML) and Causal Forests.
+
+## Double/Debiased Machine Learning
+
+Double/Debiased Machine Learning (DDML), introduced by \cite{chernozhukov_doubledebiased_2018}, estimates causal effects in high-dimensional settings where relationships among variables may be nonlinear and complex. DDML integrates econometric inference and ML's flexible predictive modeling, providing reliable causal inference while managing regularization bias typically associated with ML methods.
+
+DDML relies on two critical principles:
+
+We use DDML to estimate the causal effect of a treatment or policy variable on an outcome of interest, while controlling for high-dimensional confounders. In such settings, classical parametric methods may fail if the true relationships are nonlinear or if the relevant control variables are unknown or numerous. Machine learning methods can flexibly model these complex relationships, but they often introduce regularization bias and do not provide valid inference for causal parameters.
+
+DDML relies on two critical principles:
+
+1. Neyman Orthogonality: This ensures that the estimation is robust to small perturbations in nuisance parameter estimates, thus reducing bias.
+2. Cross-fitting: Data is partitioned to separately estimate nuisance parameters and causal effects, avoiding overfitting.
+
+
+This method relies on two key principales : Neyman orthogonoality that removes the influence of control variables on both the treatment and the outcome, reducing bias ; and cross-fitting that avoids over-fitting by using different parts of the data to estimate the control functions and the final effect. 
+
+Our analysis focuses on two primary models within the DDML framework: the Partially Linear Model (PLM) and the Interactive Regression Model (IRM).
+
+## Partially Linear Model (PLM)
+
+The PLM specifies the following relationship:
+$$Y = \theta_0 D + g_0(X) + U$$
+Here, $\theta_0$ represents the causal effect of the treatment  on the outcome , and  captures an unknown, potentially nonlinear relationship involving covariates. A critical assumption for identification is conditional orthogonality:
+$$\mathbb{E}[\text{Cov}(U, D \mid X)] = 0$$
+Letting $\ell_0(X) = \mathbb{E}[Y \mid X]$ and $m_0(X) = \mathbb{E}[D \mid X]$, the parameter $\theta_0$ can be identified by the following moment condition:
+$$\theta_0 = \frac{\mathbb{E} \left[ (Y - \ell_0(X))(D - m_0(X)) \right]}{\mathbb{E} \left[ (D - m_0(X))^2 \right]}$$
+The estimation procedure for the DDML involves two steps:
+
+1. Estimating nuisance functions $\ell_0(X)$ and $m_0(X)$ with flexible ML methods (e.g., Lasso, Random Forest, Boosting).
+2. Plug in the predicted values to residualize $Y$ and $D$, and compute $\hat{\theta}_n$ as the sample analogue of Equation using cross-fitting to reduce overfitting bias. 
+$$\hat{\theta}_n = \frac{ \frac{1}{n} \sum_{i=1}^{n} (Y_i - \hat{\ell}^{-i}(X_i))(D_i - \hat{m}^{-i}(X_i)) }{ \frac{1}{n} \sum_{i=1}^{n} (D_i - \hat{m}^{-i}(X_i))^2 }$$
+Here, cross-fitting entails dividing the dataset into $K$ folds, estimating nuisance functions on one subset and evaluating them on another, significantly reducing the risk of overfitting.
+
+## Interactive Regression Model (IRM)
+
+The IRM provides a fully flexible modeling of the treatment-covariate interaction and is specified as:
+$$Y = g_0(D, X) + U$$
+In this model, $D$ is a binary treatment indicator. Unlike PLM, IRM does not require additive separability between $D$ and the covariates $X$. We focus on two causal parameters:
+
+- Average Treatment Effect (ATE):
+$$\theta_0^{ATE} = \mathbb{E}[g_0(1, X) - g_0(0, X)]$$
+- Average Treatment Effect on the Treated (ATET):
+$$\theta_0^{ATET} = \mathbb{E}[g_0(1, X) - g_0(0, X) \mid D = 1]$$
+
+IRM identification requires two assumptions:
+
+- **Conditional Mean Independence**: $\mathbb{E}[U \mid D, X] = 0$
+- **Overlap**: $\mathbb{P}(D = 1 \mid X) \in (0,1)$with probability 1.
+
+Let $g_0(d, X) = \mathbb{E}[Y \mid D = d, X]$ and $m_0(X) = \mathbb{E}[D \mid X]$ be the nuisance functions. Then, the efficient influence function for the ATE is:
+
+$$\psi^{ATE}(W) = \frac{D(Y - g(1, X))}{m(X)} - \frac{(1 - D)(Y - g(0, X))}{1 - m(X)} + g(1, X) - g(0, X) - \theta$$
+The DDML estimator solves the empirical moment condition:
+$$\frac{1}{n} \sum_{i=1}^n \psi^{ATE}(W_i; \hat{g}, \hat{m}) = 0 \quad \Rightarrow \quad \hat{\theta}_n^{ATE}$$
+Similar to the PLM, nuisance parameters are estimated through ML methods combined with cross-fitting to achieve robustness against regularization bias and overfitting.
+
+
+## Causal Forests
+
+The Causal Forest is a nonparametric machine learning method designed to estimate heterogeneous treatment effects at the individual or subgroup level. Proposed by \cite{wager_estimation_2018}, it builds on the classic random forest algorithm but adapts it for causal questions rather than pure prediction. The method relies on a generalized random forest framework, where each tree is grown using a splitting criterion that maximizes differences in treatment effects between subgroups. Causal forests are particularly useful when treatment effects vary across individuals and when the structure of this heterogeneity is unknown. Importantly, they allow for valid inference on individual-level treatment effects under assumptions similar to those of unconfoundedness and overlap.
+
+The method operates within the *potential outcomes framework*, assuming the standard *unconfoundedness* condition:
+$$\{Y^{(0)}, Y^{(1)}\} \perp\!\!\!\perp W \mid X$$
+and targets the *Conditional Average Treatment Effect (CATE)*:
+$$\tau(x) = \mathbb{E}[Y^{(1)} - Y^{(0)} \mid X = x]$$
+Each causal tree partitions the feature space and estimates the treatment effect in each leaf as the difference in average outcomes between treated and control observations:
+$$\hat{\tau}(x) = \frac{1}{|S_1(x)|} \sum_{i \in S_1(x)} Y_i - \frac{1}{|S_0(x)|} \sum_{i \in S_0(x)} Y_i$$
+where $S_1(x)$ and $S_0(x)$ are treated and control units in the same leaf as $x$.
+
+The forest combines many such trees, each built on subsamples of the data, yielding the final estimator:
+$$\hat{\tau}(x) = \frac{1}{B} \sum_{b=1}^B \hat{\tau}_b(x)$$
+A key feature of causal forests is the use of *honest trees*, where sample-splitting ensures that the data used to build the tree structure is not reused to estimate treatment effects within leaves. This guarantees asymptotic properties such as consistency and normality. Under regularity conditions, the estimator satisfies:
+$$\frac{\hat{\tau}(x) - \tau(x)}{\sqrt{\widehat{\text{Var}}[\hat{\tau}(x)]}} \overset{d}{\longrightarrow} \mathcal{N}(0, 1)$$
+The variance can be consistently estimated using the *infinitesimal jackknife* method. Overall, causal forests provide a flexible and statistically rigorous tool for personalized causal inference, especially in high-dimensional or complex environments.
 
 \newpage
 
-# Weekdays
+# Call Timing Effects
 
-As previously mentionned, there may be evidence that a call in the middle of the week increase take-up.
-
-## PICO process
+We investigate the efficiency of call timing from both a within-week and within-month perspective.
 
 ## DAG and Hypothesis
 
-## Results 
+The directed acyclic graph (DAG) below illustrates the assumed causal relationships in a telemarketing campaign promoting term deposits. Our primary objective is to assess the impact of call timing—specifically, the day of the week and the time within the month—on the likelihood of subscription.
 
-## Heterogeneity Analysis
+\begin{figure}[H]
+\centering
 
-```{r, fig.align='center', fig.height=4, fig.width=7.25, message=FALSE, warning=FALSE, fig.cap="Change in take-up in middle of the week"}
-WEEKDAYS_results <- read_feather("results_analysis/weekdays_causal_forest.feather")
+\caption{Relation Between Call-Time and Take-Up}
+\vspace{0.25cm}
+\linespread{1.1 }
+\tikzfig{ressources/tikz/fig3}
+\end{figure}
+\vspace{-1cm}
 
-WEEKDAYS_results |> 
-  filter(name!="causal-forest-all") |>
-  mutate(name = str_remove_all(name, "causal-forest-")) |>
-  ggplot(aes(x=name, y=estimate, ymin = ci_lower, ymax = ci_upper))+
-  geom_point()+
-  geom_errorbar(width=0.5)+
-  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010")+
+The DAG distinguishes between two groups of exogenous variables: (i) individual-level socioeconomic characteristics such as occupation, marital status, and educational attainment, and (ii) macroeconomic indicators including employment rate, consumer prices, and confidence indices. These exogenous factors not only influence the outcome but also affect the timing and duration of the call. For instance, an individual's occupation may determine their availability to answer or return a call.
+
+Call duration plays a critical causal role. Intuitively, very short calls are unlikely to result in product subscription, while longer calls tend to increase the probability of a successful outcome. Duration is influenced by the timing of the call, as people may be more or less available depending on the time of day or the point in the month (e.g., due to work schedules or holidays). Duration is also affected by the number of calls made during the campaign and the aforementioned exogenous factors.
+
+The DAG also incorporates variables from prior campaigns, such as the number of calls made and the outcomes achieved. These historical variables may influence both the current campaign's call volume and its success rate.
+
+## Weekdays
+
+Descriptive statistics suggested that mid-week may be a more effective time for outreach, possibly because individuals are more engaged in work-related activities and thus more open to financial conversations. However, selection effects may be present, as we only observe those who respond.
+
+### PICO Description
+**Population**: Portuguese clients contacted by or contacting the bank
+
+**Intervention**: Calls placed during the middle of the work week (assumed "business mindset")
+
+**Control**: Individuals with similar observable characteristics who receive calls at the beginning or end of the work week
+
+**Outcome**: Probability of subscribing to the term deposit product
+
+### Results 
+```{r}
+path_results <- list.files("results_analysis/", full.names = T)
+
+WEEKDAYS_RESULTS <- lapply(path_results[str_detect(path_results, "weekdays")], read_feather) |>
+  rbindlist()
+
+EOM_RESULTS <- lapply(path_results[str_detect(path_results, "eom")], read_feather) |>
+  rbindlist()
+```
+
+
+```{r}
+#| tbl-cap: "Change in take-up in middle of the week"
+
+WEEKDAYS_RESULTS |>
+  filter(str_detect(name, "all|MLPLR|MLIRM")) |> 
+  mutate(
+    across(where(is.numeric), ~as.character(format(round(.x, 4), scientific=F))),
+    name = str_remove_all(name, "-all") |> toupper(),
+    name = if_else(name=="CAUSAL-FOREST", "C-FOREST", name),
+    ci = paste0(ci_lower, "-", ci_upper)
+  ) |>
+  select(name, Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `CI 95%` = ci) |> 
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 9.5, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "2cm") |>
+  kableExtra::column_spec(2:5, width = "2.25cm") 
+  
+```
+
+All model specifications yield statistically significant results at the 5% level ($p < 0.05$), with the largest marginal effects observed in the logit model. Estimates derived from the partial linear model using an ensemble learner are the most conservative, likely due to its capacity to capture non-linear interactions. Similarly, the interactive regression model, which allows for fully heterogeneous effects, yields comparatively smaller estimates. This suggests that more flexible models tend to produce more attenuated effect sizes.
+
+In terms of practical significance, a marginal effect of 0.012 implies a roughly 10% increase over the average take-up rate. This level of improvement may be of interest to financial institutions considering similar marketing strategies.
+
+### Heterogeneity Analysis
+
+Given that occupation may moderate the effect of mid-week calls, we further analyze results across job categories.
+
+```{r, fig.align='center', fig.height=4.5, fig.width=7, message=FALSE, warning=FALSE, fig.cap="Change in take-up in middle of the week"}
+WEEKDAYS_RESULTS |>
+  filter(!str_detect(name, "all|MLPLR|MLIRM")) |>
+  mutate(
+    model = if_else(str_detect(name, "logit-"), "Logit", "Causal Forest"), 
+    job = str_remove_all(name, "causal-forest-|logit-")
+  ) |>
+  ggplot(aes(x=job, y=estimate, ymin = ci_lower, ymax = ci_upper, color = model))+
+  geom_point(position = position_dodge(width=0.5), size=1.25)+
+  geom_errorbar(width=0.5, position = position_dodge(width=.5))+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010", color="Model Type")+
   theme_minimal()+
-  theme(text = element_text(family = "Times"))+
+  scale_color_brewer(palette="Set1")+
+  theme(text = element_text(family = "Times", size = 12), 
+        axis.text.x = element_text(size=8),
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0))+
   geom_hline(yintercept = 0, linetype="dotted")
 ```
 
-\newpage
+Logit-based marginal effects are statistically significant across most subpopulations, with particularly strong results for administrative workers, retirees, and students. Estimates from the causal forest are more noisy as the model imposes less structure and our dataset is not particularly large, most results are not significant at the standard 5% level. However, effects for administrative workers remain significant at the 5% level across both model types.
 
-# Time of the month
+These findings indicate the presence of job-related heterogeneity in responsiveness to mid-week outreach.
 
-## PICO process
+## Time of the month
 
-## DAG and Hypothesis
+We examine the effect of the time of the month on campaign success using a similar framework. A plausible hypothesis is that individuals may be more receptive to term deposit offers at the beginning of the month, when account balances are typically higher following salary payments.
 
-## Results
+### PICO Description
+**Population**: Portuguese customers contacted by or contacting the bank
 
-## Heterogeneity Analysis
+**Intervention**: Calls made in the second half of the month 
 
-```{r, fig.align='center', fig.height=4, fig.width=7.25, message=FALSE, warning=FALSE, fig.cap="Change in take-up at the end of the month"}
-EOM_results <- read_feather("results_analysis/eom_causal_forest.feather")
+**Control**: Individuals with similar observable characteristics who received calls in the first half of the month
 
-EOM_results |> 
-  filter(name!="causal-forest-all") |>
-  mutate(name = str_remove_all(name, "causal-forest-")) |>
-  ggplot(aes(x=name, y=estimate, ymin = ci_lower, ymax = ci_upper))+
-  geom_point()+
-  geom_errorbar(width=0.5)+
-  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010")+
+**Outcome**: Probability of subscribing to the term deposit product
+
+### Results
+
+```{r}
+RESULTS_EOM_CF <- read_feather("results_analysis/eom_causal_forest.feather")
+RESULTS_EOM_LOGIT <- read_feather("results_analysis/eom_logit.feather")
+```
+
+```{r}
+#| tbl-cap: "Change in take-up end of month"
+
+EOM_RESULTS |>
+  filter(str_detect(name, "all|MLPLR|MLIRM")) |> 
+  mutate(
+    across(where(is.numeric), ~as.character(format(round(.x, 4), scientific=F))),
+    name = str_remove_all(name, "-all") |> toupper(),
+    name = if_else(name=="CAUSAL-FOREST", "C-FOREST", name),
+    ci = paste0(ci_lower, "-", ci_upper)
+  ) |>
+  select(name, Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `CI 95%` = ci) |> 
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 9.5, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "2cm") |>
+  kableExtra::column_spec(2:5, width = "2.25cm")
+  
+```
+
+
+Contrary to initial expectations, our results suggest that individuals are more likely to subscribe to a term deposit at the end of the month. These findings, however, appear less robust than those obtained for within-week variation. Once again, the logit model produces the largest estimated effects, whereas the partial linear model with an ensemble learner yields the most conservative estimates.
+
+While these results should be interpreted with caution, they do provide some evidence that the timing of calls within the month can influence responsiveness to financial product offers.
+
+### Heterogeneity Analysis
+
+We again extend the analysis by exploring heterogeneity across occupational groups. As in previous sections, results from the logit model remain consistently significant across groups, while the causal forest approach identifies statistically significant effects only for retirees. This suggests that retirees may be primarily responsible for the observed average treatment effect.
+
+```{r, fig.align='center', fig.height=4.5, fig.width=7, message=FALSE, warning=FALSE, fig.cap="Change in take-up at the end of the month"}
+EOM_RESULTS |>
+  filter(!str_detect(name, "all|MLPLR|MLIRM")) |>
+  mutate(
+    model = if_else(str_detect(name, "logit-"), "Logit", "Causal Forest"), 
+    job = str_remove_all(name, "causal-forest-|logit-")
+  ) |>
+  ggplot(aes(x=job, y=estimate, ymin = ci_lower, ymax = ci_upper, color = model))+
+  geom_point(position = position_dodge(width=0.5), size=1.25)+
+  geom_errorbar(width=0.5, position = position_dodge(width=.5))+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010", color="Model Type")+
   theme_minimal()+
-  theme(text = element_text(family = "Times"))+
+  scale_color_brewer(palette="Set1")+
+  theme(text = element_text(family = "Times", size = 12), 
+        axis.text.x = element_text(size=8),
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0))+
   geom_hline(yintercept = 0, linetype="dotted")
 ```
+
+We also find weak evidence of negative effects for entrepreneurs, who may be less inclined to commit to fixed-term products at the end of the month.
 
 \newpage
 
@@ -268,9 +536,11 @@ This section analyzes macroeconomic determinants of the marketing campaign, focu
 
 ## DAG and Hypothesis
 
-The main challenge in identifying the effect of interest rates on take-up rates is endogeneity. Specifically, interest rates represent market prices for capital and are thus the joint outcome of both supply and demand.
+The main challenge in identifying the effect of interest rates on take-up rates is endogeneity. Specifically, interest rates represent market prices for capital and are thus the joint outcome of both supply and demand. For a reference on demand estimation see \cite{berry_foundations_2021}.
 
-This is problematic because interest rates are correlated with demand shocks, which directly influence take-up behavior. A clear example is the bankruptcy of Lehman Brothers, which marked the onset of the great financial crisis. This significantly altered investor risk preferences, leading to a substantial inflow of capital into safer financial instruments such as deposits or fixed term accounts.
+This is problematic because interest rates are correlated with demand shocks, which directly influence take-up behavior. A clear example is the bankruptcy of Lehman Brothers, which marked the onset of the great financial crisis. \newpage
+
+This significantly altered investor risk preferences, leading to a substantial inflow of capital into safer financial instruments such as deposits or fixed term accounts.
 
 The directed acyclic graph below summarizes the primary causal relationships assumed in this section.
 
@@ -284,7 +554,8 @@ The directed acyclic graph below summarizes the primary causal relationships ass
 
 Under the structure outlined in the DAG, the lagged interest rate at period $t-1$ can be considered a valid instrument, provided that variables influenced by this rate are appropriately controlled for. The intuition behind this instrument is based on interest rate stickiness: financial products are often priced based on previously observed rates, while current market rates reflect present expectations rather than past ones. Therefore, contemporaneous demand shocks can be assumed to be uncorrelated with lagged interest rates.
 
-This type of instrument and identification strategy is well-established in the macroeconomic literature. However, the exogeneity of the instrument cannot be formally tested. The absence of strong alternative instruments in our dataset rule out the possibility of conducting over-identification tests such as the Sargan–J test.
+This type of instrument and identification strategy is grounded in the macroeconomic literature (see \cite{blundell_initial_1998}). However, the exogeneity of the instrument cannot be formally tested and could be questionned in our case. The absence of strong alternative instruments in our dataset rule out the possibility of conducting over-identification tests such as the Sargan–J test.
+\newpage
 
 ## Results 
 
@@ -305,9 +576,10 @@ REG_DATA <- DATA_ADD_FULL |>
 
 To estimate causal effects, three methodological approaches are employed and compared: (i) a standard two-stage least squares (2SLS) estimator applied to a linear probability model, (ii) a double machine learning (DML) estimator for a partially linear instrumental variables (IV) regression, and (iii) a probit IV regression.
 
-\newpage
 
 ```{r}
+#| tbl-cap: "Results from IV estimation"
+
 RESULTS_MACRO <- read_feather("results_analysis/results_macro.feather")
 RESULTS_MACRO |> 
   rename(Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `Compute (s)` = compute)|> 
@@ -315,23 +587,18 @@ RESULTS_MACRO |>
   pivot_longer(-name, names_to = "Statistic") |> 
   remove_missing() |>
   pivot_wider(names_from = name, values_from = value) |>
-  knitr::kable(digits = 4, align = "c", caption = "Results from IV estimation")
+  knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "4.5cm") |>
+  kableExtra::column_spec(2:4, width = "2.5cm")
 
 ```
 
+All models yield statistically significant positive effects, indicating that higher interest rates increase the probability of subscription. The estimated local average treatment effects are economically substantial, ranging from 15% to nearly 40% of the baseline take-up rate.
 
-TABLE HERE 
-DML and Probit are close
-2SLS very different
+The 2SLS linear probability model produces the largest point estimates, while the two-stage probit model yields the most conservative figures. The DML-IV estimator lies in between, likely capturing nonlinear effects missed by the LPM but without the parametric constraints of the probit model.
 
-[Discussion of 2SLS + equations]
-
-[Discussion of DML + equations]
-
-[Discussion of Probit + equations]
-
-[Conclusion on results]
-
+A remark which was not made often in this report is that compute differences are massive between traditional econometric methods and ml based approaches. Not accounting for tuning the DDML-IV was 791 times slower than the basic TSLS LPM model. 
 
 \newpage
 
@@ -339,12 +606,28 @@ DML and Probit are close
 
 ## Discussion
 
+This report provides empirical evidence that timing significantly influences the success of telemarketing campaigns. While traditional campaign strategies often focus on targeting the "right" individuals, our results suggest that "when" a potential client is contacted is equally important. For marketing professionals, this implies that optimal campaign design requires a dual focus: identifying both receptive individuals and favorable timing.
+
+We employed a range of econometric and machine learning methods to estimate treatment effects and evaluate model performance. These approaches highlighted both the advantages and the limitations of flexible models in campaign evaluation and policy simulation.
+
+Additionally, we estimated interest rate elasticities of demand for term deposit products, offering important insights for banks in their pricing strategies. These results underscore the relevance of incorporating demand-side behavior into macro-level financial planning.
+
 ## Limitations 
 
+Several limitations must be acknowledged. First, the data restricts the credibility and generalizability of our findings. Specifically, non-response bias may distort our estimates—individuals who do not answer phone calls may systematically differ in unobserved ways (e.g., being busier on certain days), potentially confounding our treatment effects.
+
+Second, data constraints prevent analysis of follow-up call timing. Understanding when to re-engage with non-respondents is a critical component of effective campaign design. Unfortunately, we cannot  address this question, but we encourage future work in this area.
+
+Finally, our methodological comparisons would benefit from simulation studies under known and controlled data-generating processes (DGPs). Such studies would enable a more rigorous evaluation of estimator performance, particularly in contexts with limited sample sizes and complex interactions.
 
 \newpage
 
 # Bibliography
+\nocite{*}
+\begingroup
+\let\clearpage\relax
+\printbibliography[heading=none]
+\endgroup
 
 \newpage
 
@@ -353,40 +636,39 @@ DML and Probit are close
 
 # Appendix
 
-## Detailed statistics 
+## Additional statistics 
+
+We report some additional descriptive statistics.
 
 ```{r}
+#| tbl-cap: "Observed Marital Status"
 DATA_ADD_FULL |>
   group_by(`Marital Status` = marital) |>
   count_prop() |>
-  knitr::kable(digits = 2, align = "c", caption = "Observed marital status")
+  knitr_counts()
 ```
 
-```{r}
-DATA_ADD_FULL |>
-  group_by(`Marital Status` = marital) |>
-  count_prop() |>
-  knitr::kable(digits = 2, align = "c", caption = "Observed marital status")
-```
+Most of the individuals in our sample are married.
 
 ```{r}
+#| tbl-cap: "Observed Education Level"
 DATA_ADD_FULL |>
   group_by(`Education` = education) |>
   count_prop() |>
-  knitr::kable(digits = 2, align = "c", caption = "Observed Job titles")
+  knitr_counts()
 ```
 
+We have a wide range of educational outcomes in our data and many professions are also represented in our sample.
+
 ```{r}
+#| tbl-cap: "Observed Job Titles"
 DATA_ADD_FULL |>
   group_by(`Job Titles` = job) |>
   count_prop() |>
-  knitr::kable(digits = 2, align = "c", caption = "Observed education")
+  knitr_counts()
 ```
 
 
-## Robustness
 
-## Robustness 
 
-## Robustness
-
+ 
