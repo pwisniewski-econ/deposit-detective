@@ -52,4 +52,13 @@ rsconnect/
 !firstPage.pdf
 *.png
 *.tmp
-
+*.aux
+*.bbl
+*.blg
+*.log
+*.nav
+*.out
+*.snm
+*synctex.gz
+*.toc
+report_full.pdf
