@@ -1,4 +1,10 @@
 # Marketing Campaign Impact on Term Deposit Subscriptions 
 ## A Comparative Analysis of Causal Inference Methods
 
-This project leverages a Marketing Dataset from a Portuguese banking institution to identify factors that influence a customer's likelihood of subscribing to term deposits. Additionally, it evaluates the impact of a marketing campaign on subscription rates. The project aims to compare traditional causal inference methods, such as Inverse Probability Weighting, with modern machine-learning-based approaches like Double Machine Learning.
+This project leverages a Marketing Dataset from a Portuguese banking institution to identify when is a customer most likely to subscribe to term deposits. Additionally, it evaluates the impact of a interest rates campaign on subscription rates. The project aims to compare traditional causal inference methods with modern machine-learning-based approaches like DDML or Causal Forest.
+
+## Replication
+
+To replicate the report simply compile the quarto markdown.
+
+For full replication simply run the ordered scripts in the `src` folder. Scripts denoted "B" relate to the building process and denoted "A" relate to analysis.
