@@ -49,7 +49,6 @@ po/*~
 rsconnect/
 
 # Additional
-*.pdf
 !firstPage.pdf
 *.png
 *.tmp
