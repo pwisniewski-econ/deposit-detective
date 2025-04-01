@@ -1,0 +1,1442 @@
+---
+format: 
+  pdf:
+    number-sections: true
+    block-headings: false
+    fig-format: pdf
+    code-block-border-left: "#5b5b5b"
+    code-block-bg: "#fafafa "
+    highlight-style: pygments
+    documentclass: article
+    toc: false
+    toc-depth: 2
+    toccolor: black
+    citecolor: black
+    urlcolor: gray
+    fontsize: "12pt"
+    include-before-body: 
+      - text: |
+          \input{ressources/title-page/title-page.tex}
+    include-in-header:
+      - text: |
+          \usepackage{graphicx}
+          \usepackage{pdflscape}
+          \usepackage{pdfpages}
+          \newcommand*{\boldone}{\text{\usefont{U}{bbold}{m}{n}1}}
+          \usepackage[a4paper, portrait, footnotesep=0.75cm, margin=2.54cm]{geometry}
+          \usepackage{enumitem}
+          \usepackage{parskip}
+          \usepackage{titling}
+          \linespread{1.5}
+          \usepackage[T1]{fontenc}
+          \usepackage[hidelinks]{hyperref}
+          \hypersetup{linkcolor={black}}
+          \usepackage{amsmath}
+          \usepackage{amsfonts}
+          \usepackage[normalem]{ulem}
+          \usepackage{times}
+          \usepackage{sectsty}
+          \usepackage[backend=biber, url=false, style=authoryear, sorting=ydnt]{biblatex}
+          \addbibresource{ressources/deposit-detective.bib}
+          \usepackage{ressources/tikz/tikzit}
+          \input{ressources/tikz/tikz.tikzstyles}
+          \newcommand{\ts}{\textsuperscript}
+    pdf-engine: pdflatex
+---
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+library(margins)
+library(tidyverse)
+library(parallel)
+library(cowplot)
+library(data.table)
+library(showtext)
+library(here)
+library(arrow)
+library(future)
+library(DoubleML)
+library(mlr3)
+library(mlr3learners)
+library(mlr3tuning)
+library(mlr3pipelines)
+library(grf)
+requireNamespace("mice") 
+font_add(family = "Times", regular = "ressources/fonts/Times-New-Roman.otf")
+showtext_auto()
+showtext_opts(dpi = 300)
+
+knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F)
+```
+
+\clearpage
+
+# Introduction and Research Question
+
+Telemarketing, as defined by the Mobile Marketing Association, involves practices that enable organizations to engage interactively and relevantly with audiences via mobile devices or networks. In the banking sector, telemarketing has been widely utilized since the 1980s due to its cost-efficiency and capacity for personalized customer engagement. Banks established call centers and developed consumer databases to transition away from reliance on in-person sales, enabling targeted promotion of products such as loans, credit cards, and term deposits.
+
+The adoption of telemarketing is driven by several factors, including higher conversion rates compared to mass marketing, rapid customer outreach capabilities, and ease of campaign performance monitoring. However, challenges persist, such as low response rates, customer fatigue, and negative perceptions associated with unsolicited calls. A significant challenge for institutions remains accurately identifying customers likely to subscribe to specific products.
+
+The complexity of telemarketing campaigns makes identifying key success drivers difficult. \cite{rasool_basha_study_2024} emphasizes factors such as telemarketer skills, call list quality, and call timing. Data-driven approaches offer substantial improvements to telemarketing strategies. For instance, \cite{moro_data-driven_2014} analyzed a Portuguese banking dataset to predict telemarketing success rates for term deposit sales. Their study indicated neural networks provided superior predictive accuracy and identified critical predictive factors, including the Euribor rate, call direction (inbound or outbound), and bank agent experience.
+
+Building upon the aforementioned contribution, this report adopts a causal analysis framework to evaluate the impact of timing on telemarketing success rates within the banking industry. Answering the question of what is the best time to reach out to a potential client enbables for a more informed decisions of resource allocation.
+
+Recent advancements in causal machine learning, particularly the Double Machine Learning (DML) methodology introduced by \cite{chernozhukov_doubledebiased_2018}, facilitate addressing causal questions using machine learning tools already familiar within predictive analytics. Consequently, this study seeks to compare and evaluate various methods for identifying causal effects in the context of telemarketing campaign optimization.
+
+\newpage
+
+# Data
+
+## Marketing Campaign
+
+Our primary dataset originates from \cite{moro_data-driven_2014}, who analyzed data obtained from a bank marketing campaign conducted by a Portuguese bank between 2008 and 2010. The campaign focused on selling term deposits to clients, during a period when the bank did not utilize predictive marketing techniques. The dataset allowed the authors to assess which individuals should be prioritized in marketing efforts.
+
+The dataset comprises approximately 40,000 observations and includes over 20 variables, containing more than 80 features. It encompasses demographic details such as educational levels and employment statuses, financial indicators like loan status, account balances, or defaults, as well as methodological aspects such as contact methods and historical engagement with previous campaigns. Additionally, we complemented the dataset with Portuguese macroeconomic indicators sourced from publicly available data from institutions like the World Bank or Eurostat.
+
+```{r dadta cleaning, eval=FALSE}
+feather_export <- function(df, filename){
+  write_feather(as.data.frame(df), paste0("results_building/", filename), compression = "zstd")
+}
+
+## Conversion Table ----
+MONTH2NUM <- data.frame(
+  month = tolower(month.abb),  
+  month_num = 1:12
+)
+
+# Clean and prepare external data ------
+
+## ECB Inflation and EURIBOR ----
+import_ecb <- function(filename, colname){
+  ECB_DATA <- fread(
+    file = paste0("data/external/", filename), 
+    select = c(1,3),
+    col.names = c("date_month", colname)
+  ) 
+  ECB_DATA <- ECB_DATA |> mutate(date_month = as.Date(date_month + 1))
+  return(ECB_DATA)
+}
+
+ECB_EURIBOR <- import_ecb("ecb-12mo_euribor.csv", "euribor_12mo")
+ECB_HICP <- import_ecb("ecb-hicp.csv", "hicp")
+
+## EUROSTAT Confidence ----
+EUROSTAT_CC <- fread(
+  file = "data/external/eurostat-consumer_confidence.csv", 
+  select = c(8,9),
+  col.names = c("date_month", "cons_confidence")
+) 
+
+EUROSTAT_CC <- EUROSTAT_CC |> 
+  mutate(
+    date_month = as.Date(paste0(date_month, "-01"))
+  )
+
+## ILO Unemployment ----
+ILO_UNEMP <- fread(
+  file = "data/external/ilo-unemployment.csv", 
+  select = c(4:7),
+  col.names = c("sex", "age", "date_month", "unemployment")
+) 
+
+ILO_UNEMP <- ILO_UNEMP |>
+  filter(sex=="Sex: Total", age=="Age (Youth, adults): 25+") |>
+  mutate(date_month = as.Date(paste0(
+   substr(date_month, 1, 4), "-", 
+   substr(date_month, 6, 7), "-01"
+  ))) |>
+  select(date_month, unemployment)
+
+## EUROSTOXX 600 ----
+EUROSTOXX <- fread(
+  file = "data/external/investing-eurostoxx600.csv", 
+  select = c(1, 7),
+  col.names = c("date_month", "stoxx_return")
+) 
+
+EUROSTOXX <- EUROSTOXX |>
+  mutate(
+    month = tolower(substr(date_month, 1, 3)), 
+    stoxx_return = str_remove(stoxx_return, "%") |> as.numeric()
+  ) |>
+  left_join(MONTH2NUM, by = "month") |>
+  mutate(date_month = as.Date(paste0(
+    substr(date_month, 8, 11), "-", 
+    str_pad(month_num, 2, pad = "0"), "-01"
+  ))) |>
+  select(date_month, stoxx_return)
+
+supplementary_ls <- list(
+  ECB_EURIBOR, ECB_HICP, EUROSTAT_CC, ILO_UNEMP, EUROSTOXX
+)
+
+# Main Data Import ----
+
+main_import <- function(filename, supplementary_ls, add=F){
+  
+  cols <- c("y", "age", "date_month", "day")
+  
+  if(add==T){ cols <- cols[-4] }
+  
+  DATA <- fread(paste0("data/marketing/", filename))
+  
+  DATA <- DATA |>
+  left_join(MONTH2NUM, by = "month") |>
+    mutate(
+      y = if_else(y=="yes", 1, 0),
+      new_year = if_else(month_num < lag(month_num), 1, 0, missing = 0),
+      year = 2008 + cumsum(new_year), 
+      date_month = as.Date(paste0(
+        year, "-",
+        str_pad(month_num, width = 2, pad="0"), "-01"))
+    ) |>
+    select(all_of(cols), everything(), -c(month, year, new_year, month_num))
+  
+  for(DF in supplementary_ls){
+    DATA <- DATA |>
+      left_join(DF, by = "date_month")
+  }
+  
+  return(DATA)
+
+}
+
+DATA_FULL <- main_import("bank-full.csv", supplementary_ls) |>
+  mutate(end_month = if_else(day>16, 1, 0)) #Treatment variable
+
+DATA_ADD_FULL <- main_import("bank-additional-full.csv", supplementary_ls, add=T) |>
+  # We simplify pdays to have more meaningful groups 
+  mutate(
+    mid_week = if_else(day_of_week%in%c("mon", "fri"), 0, 1), #Treatment variable
+    pdays = case_when( 
+      pdays == 999 ~ "nc",
+      pdays < 7 ~ "<7",
+      pdays > 6 ~ "7+",
+      TRUE ~ NA_character_
+    )
+  ) 
+
+# Export ----
+feather_export(DATA_FULL, "bank-full.feather")
+feather_export(DATA_ADD_FULL, "bank-additional-full.feather")
+```
+
+It is important to note that our version of the dataset differs from the original used by \cite{moro_data-driven_2014}. Our dataset is smaller, censored, and does not contain the full range of individual-level details due to privacy concerns. Additionally, the data is not in a panel structure.
+
+\begin{figure}
+\centering
+\caption{Campaign Process and Observed Data}
+\tikzfig{ressources/tikz/fig1}
+\end{figure}
+
+This dataset records only the final successful interaction with each individual. For instance, if an individual was contacted multiple times, we observe only the outcome of their last interaction. We also do not have direct access to the bank's client dataset. This presents an identification challenge, as individuals who were recontacted after an initial rejection differ, possibly due to unobservable factors (e.g., requested new contact), from those who were contacted only once.
+
+
+\newpage
+
+## Descriptive Statistics
+
+We present descriptive statistics to provide insights into the characteristics of our dataset.
+
+```{r}
+count_prop <- function(DATA){
+  DATA |> summarise(`Count` = n()) |>
+  mutate(`Share (%)` = `Count`/sum(`Count`) * 100)
+}
+
+knitr_counts <- function(DATA){
+  DATA |>
+    knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 2, align = "c") |>
+    kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+    kableExtra::column_spec(1, width = "4.5cm") |>
+    kableExtra::column_spec(2:3, width = "2.5cm")
+}
+```
+
+
+```{r}
+DATA_ADD_FULL <- read_feather("results_building/bank-additional-full.feather") |>
+  mutate(outcome = if_else(y==1, "Sucess", "Failure"))
+DATA_FULL <- read_feather("results_building/bank-full.feather")
+```
+
+```{r}
+#| tbl-cap: "Observed Outcomes"
+
+DATA_ADD_FULL |>
+  group_by(Outcome = outcome) |>
+  count_prop() |>
+  knitr_counts()
+```
+
+Firstly, we observe that the outcome variable is significantly imbalanced, exhibiting a failure rate of approximately 89%. Additionally, as previously noted, individuals who receive multiple contacts demonstrate a decreasing probability of acceptance with each subsequent call.
+
+```{r, fig.cap= "Probability of sucess and number of calls", fig.height=3.5, fig.width=5.5}
+DATA_ADD_FULL |>
+  mutate(
+    `Last observed call` = if_else(campaign>8, "9+", as.character(campaign))
+  ) |>
+  group_by( `Last observed call`, outcome)|>
+  summarise(count = n()) |>
+  ggplot(aes(x=`Last observed call`, y=count, fill = outcome))+
+  geom_bar(stat="identity") +
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", fill="", y= "Number of Calls", caption = "Bank Marketing, PT, 2008-2010")+
+  guides(fill = guide_legend(override.aes = list(size = 0)))+
+  scale_fill_brewer(palette = "Blues")
+```
+
+However, it is important to highlight that nearly half of the observations consist of individuals contacted only once. This initial contact should remain unaffected by unobserved confounders. Consequently, our analysis will primarily focus on these first-contact interactions.
+
+```{r, fig.cap= "Number of observed last calls", fig.height=3.5, fig.width=5.5}
+DATA_ADD_FULL |>
+  group_by(date_month, outcome)|>
+  summarise(count = n()) |>
+  ggplot(aes(x=date_month, y=count, fill = outcome))+
+  geom_bar(stat="identity") +
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", fill="First Call", y= "Number of Calls", caption = "Bank Marketing, PT, 2008-2010")+
+  guides(fill = guide_legend(override.aes = list(size = 0)))+
+  scale_fill_brewer(palette = "Blues") 
+```
+
+Examining the temporal distribution of the campaign, we find that marketing efforts were not evenly distributed over time. The majority of calls occurred early in the campaign, tapering off substantially towards 2010. This trend may reflect strategic shifts by the bank following the onset of the Great Financial Crisis, potentially driven by changes in interest rates affecting product profitability or consumer demand.
+
+```{r, fig.cap= "Euribor 12mo rates", fig.height=3, fig.width=5.5}
+DATA_ADD_FULL |>
+  select(date_month, euribor_12mo) |>
+  unique() |>
+  ggplot(aes(x = date_month, y=euribor_12mo))+
+  geom_line()+
+  theme_minimal()+
+  theme(text = element_text(family = "Times"), 
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0),
+        legend.title = element_text(size = 9), legend.text = element_text(size = 8))+
+  labs(x= "", y= "Interest Rate (%)", caption = "Euribor data, 2008-2010")
+```
+
+Nonetheless, the variation in interest rates over this period provides an opportunity to investigate their impact on take-up rates, which will be explored in details in the final section. A preliminary correlation analysis reveals, as anticipated, a negative correlation between the number of contacts and acceptance probability during the last contact.
+
+```{r,  fig.cap= "\\vspace{-0.3cm} Correlations between numeric variables", fig.height=4, fig.width=4}
+numeric_data <- DATA_ADD_FULL |>
+  select(where(is.numeric)) |>
+  select(-c(hicp, stoxx_return, cons_confidence, nr.employed, unemployment, euribor3m, cons.conf.idx, cons.price.idx, emp.var.rate, mid_week))
+
+cor_matrix <- cor(numeric_data)
+ggcorrplot::ggcorrplot(cor_matrix, type = "lower")+
+  theme(text=element_text(family = "Times"))
+```
+\vspace{-0.3cm} space{-0.3cm} Furthermore, we observe a negative correlation between interest rates and acceptance rates. This relationship will be analyzed more comprehensively in the subsequent section but is likely indicative of demand shocks.
+
+```{r}
+WEEKLY_SUCCESS <- DATA_ADD_FULL |>
+  mutate(
+    Share = if_else(y == 1, "Success", "Failure"),
+    day_of_week = factor(
+      day_of_week,
+      levels = c("mon", "tue", "wed", "thu", "fri"),
+      labels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+    )
+  ) |>
+  count(day_of_week, Share) |>
+  group_by(day_of_week) |>
+  mutate(prop = n / sum(n)) |>
+  ungroup()
+
+knitr::kable(
+  bind_rows(
+    WEEKLY_SUCCESS |>
+      select(-n) |>
+      pivot_wider(names_from = "day_of_week", values_from = "prop"),
+    WEEKLY_SUCCESS |>
+      group_by(day_of_week) |>
+      summarize(n = sum(n), .groups = "drop") |>
+      pivot_wider(names_from = "day_of_week", values_from = "n") |>
+      mutate(Share = "Count")
+  ),
+  digits = 3,
+  align = "c",
+  caption = "Share of successful calls"
+)
+```
+
+Finally, the data indicates that the day of the week may influence the likelihood of a successful outcome.
+
+```{r variable_selection, eval=FALSE}
+x_names <- c(
+  "age", "job", "marital", "education", "default", "housing", "loan", 
+  "previous", "poutcome", "contact", "pdays", "euribor_12mo", "hicp", 
+  "cons_confidence", "unemployment", "stoxx_return"
+)
+
+x_names_full <- x_names[x_names!="pdays"]
+
+job_list <- c(levels(MICE_ADD_FULL[[1]]$job), "all") 
+```
+
+## Imputations (MICE)
+
+The dataset contains several "unknown" entries, however, given the significant reduction in sample size resulting from selecting only single-contact observations, further exclusion of data points is undesirable. Therefore, we opted to impute missing values.
+
+```{r}
+#| tbl-cap: "Number of 'unknown' observations"
+
+DATA_ADD_FULL |> 
+    filter(campaign==1) |>
+    summarise(across(where(is.character), ~ sum(.x=="unknown"))) |>
+    select(1:6) |>
+    knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 2, align = "c") |>
+    kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+    kableExtra::column_spec(1:6, width = "2cm") 
+  
+```
+
+
+Missing data can introduce bias and compromise the accuracy of results. We assume that the missing values follow a Missing at Random (MAR) pattern, meaning the probability of a value being missing depends solely on observed data rather than on unobserved variables. This means that after accounting for available data, "any remaining missingness is completely random." \parencite{graham_missing_2009}.  This permits the use of Multiple Imputation by Chained Equations (MICE), a method that models relationships between variables to generate plausible values that mirror observed patterns of missingness. The procedure can be summarized in three key phases:
+
+```{r mice_imputation, eval=FALSE}
+# Shared functions ----
+par_mice <- function(DATA){
+  DATA <- mice::mice(DATA, m=1) |>
+    mice::complete(action = 1)
+}
+
+unknown_imputations <- function(DATA, cl){
+  char_u <- DATA |> 
+    summarise(across(where(is.character), ~ any(grepl("unknown", . , ignore.case = TRUE)))) 
+  
+  char_u <- names(char_u)[char_u==T]
+  # For DATA_ADD_FULL unknowns are:
+  # [1] "job" "marital" "education" "default" "housing" "loan"  
+  
+  DATA <- DATA |>
+    mutate(across(all_of(char_u), ~if_else(.x == "unknown", NA_character_, .x))) |>
+    mutate(across(where(is.character), ~as.factor(.x)))
+  
+  data_ls <- parLapply(cl, rep(list(DATA), 6), par_mice)
+  
+  return(data_ls) #this returns data after imputation
+}
+
+# Import Data -----
+DATA_FULL <- read_feather("results_building/bank-full.feather") |> filter(campaign==1)
+DATA_ADD_FULL <- read_feather("results_building/bank-additional-full.feather") |> filter(campaign==1)
+
+# Main imputations ------
+
+## Parallel Setup (with RNG management) ----- 
+cl <- makeCluster(min(6, detectCores(logical = FALSE)))
+clusterSetRNGStream(cl, iseed = 584461256)
+
+## Run Imputations and Export ----
+MICE_FULL <- unknown_imputations(DATA_FULL, cl)
+write_rds(MICE_FULL, "results_building/bank-full-mice6.rds", compress = "xz")
+
+MICE_ADD_FULL <- unknown_imputations(DATA_ADD_FULL, cl)
+write_rds(MICE_ADD_FULL, "results_building/bank-additional-full-mice6.rds", compress = "xz")
+
+stopCluster(cl)
+```
+
+1. Imputation Phase: Each variable containing missing values is imputed based on other variables. MICE employs a regression-based approach, predicting missing values from observed data for each incomplete variable sequentially.
+2. Iteration Phase: The imputation step is iteratively repeated, typically around ten cycles, to allow for convergence of imputed values \parencite{raghunathan_what_2004}.
+3. Pooling Phase: The imputation procedure is performed multiple times (m iterations), resulting in several complete datasets. Following established guidelines, we chose to perform five imputation iterations (m = 6). This decision aligns with recommendations from \cite{bennett_how_2001}, suggesting that 5 to 10 iterations are appropriate. \cite{hawthorne_imputing_2005} similarly advocate for fewer than ten iterations, while \cite{sterne_multiple_2009} specifically recommend three or five iterations. 
+
+Regressions from each imputed dataset are combined using Rubin’s rules \parencite{rubin_multiple_1987}.
+
+```{r rubin_pooling, eval=FALSE}
+# Shared Resources ----
+job_rubin <- function(job, data, model_name){
+  #function to extract heterogeneity results
+  data <- data |> filter(job_type == job)
+  rubin_pooling(data$beta, data$se, paste0(model_name, job))
+}
+
+rubin_pooling <- function(estimates, ses, name) {
+  #function used to pool our aggregates
+  m <- length(estimates)
+  
+  # Pooled estimate and variance components
+  pooled_estimate <- mean(estimates)
+  within_var <- mean(ses^2)
+  between_var <- var(estimates)
+  
+  # Total variance using Rubin's formula
+  total_var <- within_var + (1 + 1/m) * between_var
+  pooled_se <- sqrt(total_var)
+  
+  # Results
+  z_stat <- pooled_estimate / pooled_se
+  p_value <- 2 * (1 - pnorm(abs(z_stat)))
+  ci_lower <- pooled_estimate - 1.96 * pooled_se
+  ci_upper <- pooled_estimate + 1.96 * pooled_se
+  
+  data.frame(
+    name = name,
+    estimate = pooled_estimate, 
+    std_error = pooled_se,
+    p_value = p_value,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper
+  )
+}
+```
+
+\newpage
+
+# Methodology, Econometrics and Machine Learning
+
+To answer the question of best timing, we employ both traditional econometric methods, such as logistic regression, and advanced nonparametric machine learning techniques. Nonparametric ML approaches are particularly valuable as they effectively capture complex, highly nonlinear relationships. Specifically, we use Double/Debiased Machine Learning (DDML) and Causal Forests.
+
+```{r logit_computations, eval=FALSE}
+
+MICE_ADD_FULL <- read_rds("results_building/bank-additional-full-mice6.rds")
+MICE_FULL <- read_rds("results_building/bank-full-mice6.rds")
+
+compute_logit <- function(DATA, xcols, dcol, job_list){
+  library(tidyverse)
+  library(data.table)
+  
+  job_ame <- function(job_type, variable, DATA, model){
+    if(job_type=="all"){
+      ame_out <- margins::margins(model, variables = variable) |>
+        summary()
+    } else{
+      ame_out <- margins::margins(model, variables = variable,
+                                  data = DATA |> filter(job==job_type)) |>
+        summary()
+    }
+    data.frame(job_type, beta = ame_out$AME, se = ame_out$SE, row.names = NULL)
+  }
+  
+  DATA <- DATA |> select(y, all_of(c(dcol,xcols)))
+  logit_model <- glm(y ~ ., data = DATA, family = binomial)
+  lapply(job_list, job_ame, dcol, DATA, logit_model) |> 
+    rbindlist() #returns results from logit estimation (marginal effects); 
+}
+
+# Main computations -----
+
+## Parallel Setup -----
+cl <- makeCluster(min(6,detectCores(logical = FALSE)))
+
+## Compute Results for Weekdays ----
+WEEKDAY_LOGIT <- parLapply(cl, MICE_ADD_FULL, compute_logit, x_names, "mid_week", job_list) |> 
+  rbindlist()
+
+## Compute Results for End of Month ----
+EOM_LOGIT <- parLapply(cl, MICE_FULL, compute_logit, c(x_names, "balance"), "end_month", job_list) |> 
+  rbindlist()
+
+stopCluster(cl)
+
+## Agregate with Rubin ----
+RESULTS_WEEKDAY_LOGIT <- lapply(job_list, job_rubin, WEEKDAY_LOGIT, "logit-") |> rbindlist()
+RESULTS_EOM_LOGIT <- lapply(job_list, job_rubin, EOM_LOGIT, "logit-") |> rbindlist()
+
+## Export ----
+write_feather(RESULTS_WEEKDAY_LOGIT, "results_analysis/weekdays_logit.feather", compression = "zstd")
+write_feather(RESULTS_EOM_LOGIT, "results_analysis/eom_logit.feather", compression = "zstd")
+```
+
+## Double/Debiased Machine Learning
+
+Double/Debiased Machine Learning (DDML), introduced by \cite{chernozhukov_doubledebiased_2018}, estimates causal effects in high-dimensional settings where relationships among variables may be nonlinear and complex. DDML integrates econometric inference and ML's flexible predictive modeling, providing reliable causal inference while managing regularization bias typically associated with ML methods.
+
+DDML relies on two critical principles:
+
+We use DDML to estimate the causal effect of a treatment or policy variable on an outcome of interest, while controlling for high-dimensional confounders. In such settings, classical parametric methods may fail if the true relationships are nonlinear or if the relevant control variables are unknown or numerous. Machine learning methods can flexibly model these complex relationships, but they often introduce regularization bias and do not provide valid inference for causal parameters.
+
+DDML relies on two critical principles:
+
+1. Neyman Orthogonality: This ensures that the estimation is robust to small perturbations in nuisance parameter estimates, thus reducing bias.
+2. Cross-fitting: Data is partitioned to separately estimate nuisance parameters and causal effects, avoiding overfitting.
+
+
+This method relies on two key principales : Neyman orthogonoality that removes the influence of control variables on both the treatment and the outcome, reducing bias ; and cross-fitting that avoids over-fitting by using different parts of the data to estimate the control functions and the final effect. 
+
+Our analysis focuses on two primary models within the DDML framework: the Partially Linear Model (PLM) and the Interactive Regression Model (IRM).
+
+```{r dml_computations, eval=FALSE}
+set.seed(5132483)
+
+parallel_irm <- function(DATA, xcols, dcol, ycol, lrn_m, lrn_g){
+  #helper function to run the IRM in parallel
+  library(DoubleML)
+  library(mlr3)
+  library(mlr3learners)
+  library(mlr3tuning)
+  library(mlr3pipelines)
+  
+  dml_data <- DoubleMLData$new(
+    as.data.table(DATA), 
+    y_col = ycol, 
+    d_cols = dcol, 
+    x_cols = xcols
+  )
+  
+  dml_irm <- DoubleMLIRM$new(
+    dml_data, 
+    ml_m = lrn_m, 
+    ml_g = lrn_g, 
+    score = "ATE",
+    n_folds = 8
+  )
+  
+  dml_irm$fit()
+  
+  return(dml_irm)
+  
+}
+
+parallel_plm <- function(DATA, xcols, dcol, ycol, lrn_m, lrn_l){
+  #helper function to run the PLM in parallel
+  
+  library(DoubleML)
+  library(mlr3)
+  library(mlr3learners)
+  library(mlr3tuning)
+  library(mlr3pipelines)
+  
+  dml_data <- DoubleMLData$new(
+    as.data.table(DATA), 
+    y_col = ycol, 
+    d_cols = dcol, 
+    x_cols = xcols
+  )
+  
+  dml_irm <- DoubleMLPLR$new(
+    dml_data, 
+    ml_m = lrn_m, 
+    ml_l = lrn_l, 
+    score = "partialling out",
+    n_folds = 8
+  )
+  
+  dml_irm$fit()
+  
+  return(dml_irm)
+  
+}
+
+# Main logic ----
+
+## Stage 1: Tuning ----
+
+tune_dml <- function(DATA, xcols, treatment, method){
+  #function to tune both IRM and PLM
+  plan(multisession, workers = parallel::detectCores(logical = FALSE))
+  
+  dml_data <- DoubleMLData$new(
+    as.data.table(DATA), 
+    y_col = "y", 
+    d_cols = treatment, 
+    x_cols = xcols
+  )
+  
+  if(method=="PLM"){
+    dml_plr <- DoubleMLPLR$new(
+      dml_data, 
+      ml_m = lrn("classif.ranger"), 
+      ml_l = lrn("regr.ranger"), 
+      score = "partialling out",
+      n_folds = 8
+    )
+    param_grid = list(
+      "ml_l" = paradox::ps(
+        num.trees = paradox::p_int(lower = 50, upper = 500),
+        mtry = paradox::p_int(lower = 1, upper = 5),
+        min.node.size = paradox::p_int(lower = 5, upper = 10))
+    )
+  }else if(method=="IRM"){
+    dml_plr <- DoubleMLIRM$new(
+      dml_data, 
+      ml_m = lrn("classif.ranger"), 
+      ml_g = lrn("regr.ranger"), 
+      score = "ATE",
+      n_folds = 8
+    )
+    param_grid = list(
+      "ml_g" = paradox::ps(
+        num.trees = paradox::p_int(lower = 50, upper = 500),
+        mtry = paradox::p_int(lower = 1, upper = 5),
+        min.node.size = paradox::p_int(lower = 5, upper = 10))
+    )
+  }
+  
+  param_grid = append(param_grid, list(
+    "ml_m" = paradox::ps(
+      num.trees = paradox::p_int(lower = 50, upper = 500),
+      mtry = paradox::p_int(lower = 1, upper = 5),
+      min.node.size = paradox::p_int(lower = 5, upper = 10))
+  ))
+  
+  tune_settings <- list(
+    rsmp_tune = rsmp("cv", folds = 5),
+    terminator = trm("evals", n_evals = 25),
+    algorithm = tnr("random_search")
+  )
+  
+  dml_plr$tune(param_set = param_grid, tune_settings = tune_settings)
+  
+  return(dml_plr)
+}
+
+initial_tuning <- function(DATA, xcols, dcol, type){
+  #helper function to start the previous function
+  dml <- tune_dml(DATA, xcols, dcol, type)
+  if(type=="PLM"){
+    dml_2 <- dml$tuning_res[[1]]$ml_l$params[[1]]
+  }else if(type=="IRM"){
+    dml_2 <- dml$tuning_res[[1]]$ml_g1$params[[1]]
+  }
+  dml_m <- dml$tuning_res[[1]]$ml_m$params[[1]]
+  tuned_dml_2 <- lrn("regr.ranger", num.trees = dml_2$num.trees, mtry = dml_2$mtry, min.node.size = dml_2$min.node.size)
+  tuned_dml_m <- lrn("classif.ranger", num.trees = dml_m$num.trees, mtry = dml_m$mtry, min.node.size = dml_m$min.node.size)
+  return(list(tuned_dml_m, tuned_dml_2))
+}
+
+### Tune First Dataset and re-use settings ----
+tuned_week_plm <- initial_tuning(MICE_ADD_FULL[[1]], x_names, "mid_week", "PLM")
+tuned_month_plm <- initial_tuning(MICE_FULL[[1]], x_names_full, "end_month", "PLM")
+
+tuned_week_irm <- initial_tuning(MICE_ADD_FULL[[1]], x_names, "mid_week", "IRM")
+tuned_month_irm <- initial_tuning(MICE_FULL[[1]], x_names_full, "end_month", "IRM")
+
+
+## Stage 2: All imputations ----
+extract_pooled <- function(results, name){
+  #helper function to extract results from our estimates
+  estimates  <- sapply(results, "[[", "coef")
+  ses <- sapply(results, "[[", "se")
+  rubin_pooling(estimates, ses, name)
+}
+
+## Parallel Setup ----
+cl <- makeCluster(min(6, detectCores(logical = FALSE)))
+clusterSetRNGStream(cl, iseed = 21548561)
+
+## PLM for middle of the week ----
+results_week <- parLapply(cl, MICE_ADD_FULL, parallel_plm, xcols = x_names, dcol = "mid_week", ycol = "y", tuned_week_plm[[1]], tuned_week_plm[[2]])
+RESULTS_WEEK_DML <- extract_pooled(results_week, "MLPLR")
+write_feather(RESULTS_WEEK_DML, "results_analysis/weekdays_dml.feather", compression = "zstd")
+
+## PLM for end of month ----
+results_eom <- parLapply(cl, MICE_FULL, parallel_plm, xcols = x_names_full, dcol = "end_month", ycol = "y", tuned_month_plm[[1]], tuned_month_plm[[2]])
+RESULTS_EOM_DML <- extract_pooled(results_eom, "MLPLR")
+write_feather(RESULTS_EOM_DML, "results_analysis/eom_dml.feather", compression = "zstd")
+
+```
+
+
+## Partially Linear Model (PLM)
+
+The PLM specifies the following relationship:
+$$Y = \theta_0 D + g_0(X) + U$$
+Here, $\theta_0$ represents the causal effect of the treatment  on the outcome , and  captures an unknown, potentially nonlinear relationship involving covariates. A critical assumption for identification is conditional orthogonality:
+$$\mathbb{E}[\text{Cov}(U, D \mid X)] = 0$$
+Letting $\ell_0(X) = \mathbb{E}[Y \mid X]$ and $m_0(X) = \mathbb{E}[D \mid X]$, the parameter $\theta_0$ can be identified by the following moment condition:
+$$\theta_0 = \frac{\mathbb{E} \left[ (Y - \ell_0(X))(D - m_0(X)) \right]}{\mathbb{E} \left[ (D - m_0(X))^2 \right]}$$
+The estimation procedure for the DDML involves two steps:
+
+1. Estimating nuisance functions $\ell_0(X)$ and $m_0(X)$ with flexible ML methods (e.g., Lasso, Random Forest, Boosting).
+2. Plug in the predicted values to residualize $Y$ and $D$, and compute $\hat{\theta}_n$ as the sample analogue of Equation using cross-fitting to reduce overfitting bias. 
+$$\hat{\theta}_n = \frac{ \frac{1}{n} \sum_{i=1}^{n} (Y_i - \hat{\ell}^{-i}(X_i))(D_i - \hat{m}^{-i}(X_i)) }{ \frac{1}{n} \sum_{i=1}^{n} (D_i - \hat{m}^{-i}(X_i))^2 }$$
+Here, cross-fitting entails dividing the dataset into $K$ folds, estimating nuisance functions on one subset and evaluating them on another, significantly reducing the risk of overfitting.
+
+```{r,eval=FALSE}
+## IRM for middle of the week ----
+results_week_irm <- parLapply(cl, MICE_ADD_FULL, parallel_irm, xcols = x_names, dcol = "mid_week", ycol = "y", tuned_week_irm[[1]], tuned_week_irm[[2]])
+RESULTS_WEEK_IRM <- extract_pooled(results_week_irm, "MLIRM")
+write_feather(RESULTS_WEEK_IRM, "results_analysis/weekdays_irm.feather", compression = "zstd")
+
+## IRM for end of month ----
+results_eom_irm <- parLapply(cl, MICE_FULL, parallel_plm, xcols = x_names_full, dcol = "end_month", ycol = "y", tuned_month_irm[[1]], tuned_month_irm[[2]])
+RESULTS_EOM_IRM <- extract_pooled(results_eom_irm, "MLIRM")
+write_feather(RESULTS_EOM_IRM, "results_analysis/eom_irm.feather", compression = "zstd")
+
+stopCluster(cl)
+```
+
+
+## Interactive Regression Model (IRM)
+
+The IRM provides a fully flexible modeling of the treatment-covariate interaction and is specified as:
+$$Y = g_0(D, X) + U$$
+In this model, $D$ is a binary treatment indicator. Unlike PLM, IRM does not require additive separability between $D$ and the covariates $X$. We focus on two causal parameters:
+
+- Average Treatment Effect (ATE):
+$$\theta_0^{ATE} = \mathbb{E}[g_0(1, X) - g_0(0, X)]$$
+- Average Treatment Effect on the Treated (ATET):
+$$\theta_0^{ATET} = \mathbb{E}[g_0(1, X) - g_0(0, X) \mid D = 1]$$
+
+IRM identification requires two assumptions:
+
+- **Conditional Mean Independence**: $\mathbb{E}[U \mid D, X] = 0$
+- **Overlap**: $\mathbb{P}(D = 1 \mid X) \in (0,1)$with probability 1.
+
+Let $g_0(d, X) = \mathbb{E}[Y \mid D = d, X]$ and $m_0(X) = \mathbb{E}[D \mid X]$ be the nuisance functions. Then, the efficient influence function for the ATE is:
+
+$$\psi^{ATE}(W) = \frac{D(Y - g(1, X))}{m(X)} - \frac{(1 - D)(Y - g(0, X))}{1 - m(X)} + g(1, X) - g(0, X) - \theta$$
+The DDML estimator solves the empirical moment condition:
+$$\frac{1}{n} \sum_{i=1}^n \psi^{ATE}(W_i; \hat{g}, \hat{m}) = 0 \quad \Rightarrow \quad \hat{\theta}_n^{ATE}$$
+Similar to the PLM, nuisance parameters are estimated through ML methods combined with cross-fitting to achieve robustness against regularization bias and overfitting.
+
+
+## Causal Forests
+
+The Causal Forest is a nonparametric machine learning method designed to estimate heterogeneous treatment effects at the individual or subgroup level. Proposed by \cite{wager_estimation_2018}, it builds on the classic random forest algorithm but adapts it for causal questions rather than pure prediction. The method relies on a generalized random forest framework, where each tree is grown using a splitting criterion that maximizes differences in treatment effects between subgroups. Causal forests are particularly useful when treatment effects vary across individuals and when the structure of this heterogeneity is unknown. Importantly, they allow for valid inference on individual-level treatment effects under assumptions similar to those of unconfoundedness and overlap.
+
+The method operates within the *potential outcomes framework*, assuming the standard *unconfoundedness* condition:
+$$\{Y^{(0)}, Y^{(1)}\} \perp\!\!\!\perp W \mid X$$
+and targets the *Conditional Average Treatment Effect (CATE)*:
+$$\tau(x) = \mathbb{E}[Y^{(1)} - Y^{(0)} \mid X = x]$$
+Each causal tree partitions the feature space and estimates the treatment effect in each leaf as the difference in average outcomes between treated and control observations:
+$$\hat{\tau}(x) = \frac{1}{|S_1(x)|} \sum_{i \in S_1(x)} Y_i - \frac{1}{|S_0(x)|} \sum_{i \in S_0(x)} Y_i$$
+where $S_1(x)$ and $S_0(x)$ are treated and control units in the same leaf as $x$.
+
+The forest combines many such trees, each built on subsamples of the data, yielding the final estimator:
+$$\hat{\tau}(x) = \frac{1}{B} \sum_{b=1}^B \hat{\tau}_b(x)$$
+A key feature of causal forests is the use of *honest trees*, where sample-splitting ensures that the data used to build the tree structure is not reused to estimate treatment effects within leaves. This guarantees asymptotic properties such as consistency and normality. Under regularity conditions, the estimator satisfies:
+$$\frac{\hat{\tau}(x) - \tau(x)}{\sqrt{\widehat{\text{Var}}[\hat{\tau}(x)]}} \overset{d}{\longrightarrow} \mathcal{N}(0, 1)$$
+The variance can be consistently estimated using the *infinitesimal jackknife* method. Overall, causal forests provide a flexible and statistically rigorous tool for personalized causal inference, especially in high-dimensional or complex environments.
+
+```{r compute_forests, eval=FALSE}
+tuned_forest <- compute_cf(MICE_ADD_FULL[[1]], x_names, "y", "mid_week", job_list, "all")
+cf_params <- tuned_forest$tunable.params
+
+WEEKDAYS <- lapply(MICE_ADD_FULL, compute_cf, x_names, "y", "mid_week", job_list, "overlap", cf_params) |>
+  rbindlist()
+
+WEEKDAYS_results <- lapply(job_list, job_rubin, WEEKDAYS, "causal-forest-") |> rbindlist()
+
+EOM <- lapply(MICE_FULL, compute_cf, c(x_names, "balance"), "y", "end_month", job_list, "overlap", cf_params) |>
+  rbindlist()
+
+EOM_results <- lapply(job_list, job_rubin, EOM, "causal-forest-") |> rbindlist()
+
+write_feather(WEEKDAYS_results, "results_analysis/weekdays_causal_forest.feather")
+write_feather(EOM_results, "results_analysis/eom_causal_forest.feather")
+```
+
+\newpage
+
+```{r compute_ens, eval=FALSE}
+# Main logic ----
+
+## Stage 1: Tuning ----
+
+### Define tuning settings for hyper parameter search
+tune_settings <- list(
+  
+  terminator = trm("evals", n_evals = 10),
+  algorithm = tnr("random_search")
+)
+
+tune_settings = list(
+  rsmp_tune = rsmp("cv", folds = 3),
+  terminator = trm("evals", n_evals = 10),
+  tuner = tnr("random_search")
+)
+
+# Helper function to wrap a learner in an Auto-Tuner based on task type
+auto_tuner <- function(learner, param_set, id) {
+  # Set performance measure based on task type (classification or regression)
+  if (grepl("^classif", learner$id)) {
+    measure <- msr("classif.ce")
+  } else {
+    measure <- msr("regr.mse")
+  }
+  
+  AutoTuner$new(
+    learner = learner,
+    resampling = rsmp("cv", folds = 5),
+    measure = measure,
+    search_space = param_set,
+    terminator = tune_settings$terminator,
+    tuner = tune_settings$tuner,
+    store_models = TRUE,
+    id = id
+  )
+}
+
+### Ensemble for Classification ----
+# Define individual learners
+at_nnet <- auto_tuner(
+  lrn("classif.nnet"),
+  ps(
+    size = p_int(1, 10),
+    decay = p_dbl(0.0, 0.1)
+  ),
+  "nnet"
+)
+
+at_logreg <- lrn("classif.log_reg")  # Logistic regression (no tuning)
+
+at_rf <- auto_tuner(
+  lrn("classif.ranger"),
+  ps(
+    num.trees = p_int(50, 500),
+    mtry = p_int(1, 5),
+    min.node.size = p_int(5, 10)
+  ),
+  "ranger"
+)
+
+# Combine learners into an ensemble using a union and averaging operator
+graph_ensemble_classif <- gunion(list(
+  po("learner", at_nnet),
+  po("learner", at_logreg),
+  po("learner", at_rf)
+)) %>>% po("classifavg")
+
+# Create the ensemble learner for classification
+ensemble_learner <- GraphLearner$new(graph_ensemble_classif)
+ensemble_pipe_classif <- as_learner(ensemble_learner)
+
+### Ensemble for Regression ---- 
+
+# Define individual learners
+at_lm <- lrn("regr.lm")  # Linear regression (no tuning)
+
+at_nnet_reg <- auto_tuner(
+  lrn("regr.nnet"),
+  ps(
+    size = p_int(1, 3),
+    decay = p_dbl(0.0, 0.1)
+  ),
+  "nnet_reg"
+)
+
+at_rf_reg <- auto_tuner(
+  lrn("regr.ranger"),
+  ps(
+    num.trees = p_int(75, 250),
+    mtry = p_int(1, 5),
+    min.node.size = p_int(4, 10)
+  ),
+  "rf_reg"
+)
+
+at_xgb <- auto_tuner(
+  lrn("regr.xgboost"),
+  ps(
+    nrounds = p_int(50, 150),
+    eta = p_dbl(0.01, 0.3),
+    max_depth = p_int(2, 6)
+  ),
+  "xgb"
+)
+
+# Combine learners into an ensemble using a union and averaging operator
+graph_ensemble_reg <- gunion(list(
+  po("learner", at_lm),
+  po("learner", at_nnet_reg),
+  po("learner", at_rf_reg),
+  po("learner", at_xgb)
+)) %>>% po("regravg")
+
+# Create the ensemble learner for regression
+ensemble_learner_reg <- GraphLearner$new(graph_ensemble_reg)
+ensemble_pipe_reg <- as_learner(ensemble_learner_reg)
+
+## Stage 2: Double Machine Learning Setup and Execution ----
+ens_wrapper <- function(DATA, xcols, treatment){
+  #helper function to run the ensemble learner
+  library(future)
+  plan(multisession, workers = 3)
+  DATA = as.data.frame(model.matrix(~ . - 1, data = DATA))
+  parallel_plm(
+    DATA, names(DATA)[stringr::str_detect(names(DATA), paste(xcols, collapse = "|"))],
+    treatment, "y", ensemble_pipe_classif, ensemble_pipe_reg
+  )
+}
+
+### Day of the week ----
+
+#### Setup Parallel ----
+cl <- makeCluster(min(5, detectCores(logical = FALSE)))
+clusterSetRNGStream(cl, iseed = 81342556)
+clusterExport(cl, varlist = list("ensemble_pipe_classif", "ensemble_pipe_reg", "parallel_plm"))
+
+results_week_ens_ls <- parLapply(cl, MICE_ADD_FULL[1:5], ens_wrapper, x_names, "mid_week")
+RESULTS_WEEK_ENS <- extract_pooled(results_week_ens_ls, "MLPLR-ENS") 
+RESULTS_WEEK_ENS
+write_feather(RESULTS_WEEK_ENS, "results_analysis/weekdays_dml_ens.feather", compression = "zstd")
+
+stopCluster(cl)
+
+### End of the month ----
+
+#### Setup Parallel ----
+cl <- makeCluster(min(5, detectCores(logical = FALSE)))
+clusterSetRNGStream(cl, iseed = 5421257)
+clusterExport(cl, varlist = list("ensemble_pipe_classif", "ensemble_pipe_reg", "parallel_plm"))
+
+results_eom_ens_ls <- parLapply(cl, MICE_FULL[1:5], ens_wrapper, x_names_full, "end_month")
+RESULTS_EOM_ENS <- extract_pooled(results_eom_ens_ls, "MLPLR-ENS") 
+RESULTS_EOM_ENS
+write_feather(RESULTS_EOM_ENS, "results_analysis/eom_dml_ens.feather", compression = "zstd")
+
+stopCluster(cl)
+```
+
+
+# Call Timing Effects
+
+We investigate the efficiency of call timing from both a within-week and within-month perspective.
+
+## DAG and Hypothesis
+
+The directed acyclic graph (DAG) below illustrates the assumed causal relationships in a telemarketing campaign promoting term deposits. Our primary objective is to assess the impact of call timing—specifically, the day of the week and the time within the month—on the likelihood of subscription.
+
+\begin{figure}[H]
+\centering
+
+\caption{Relation Between Call-Time and Take-Up}
+\vspace{0.25cm}
+\linespread{1.1 }
+\tikzfig{ressources/tikz/fig3}
+\end{figure}
+\vspace{-1cm}
+
+The DAG distinguishes between two groups of exogenous variables: (i) individual-level socioeconomic characteristics such as occupation, marital status, and educational attainment, and (ii) macroeconomic indicators including employment rate, consumer prices, and confidence indices. These exogenous factors not only influence the outcome but also affect the timing and duration of the call. For instance, an individual's occupation may determine their availability to answer or return a call.
+
+Call duration plays a critical causal role. Intuitively, very short calls are unlikely to result in product subscription, while longer calls tend to increase the probability of a successful outcome. Duration is influenced by the timing of the call, as people may be more or less available depending on the time of day or the point in the month (e.g., due to work schedules or holidays). Duration is also affected by the number of calls made during the campaign and the aforementioned exogenous factors.
+
+The DAG also incorporates variables from prior campaigns, such as the number of calls made and the outcomes achieved. These historical variables may influence both the current campaign's call volume and its success rate.
+
+## Weekdays
+
+Descriptive statistics suggested that mid-week may be a more effective time for outreach, possibly because individuals are more engaged in work-related activities and thus more open to financial conversations. However, selection effects may be present, as we only observe those who respond.
+
+### PICO Description
+**Population**: Portuguese clients contacted by or contacting the bank
+
+**Intervention**: Calls placed during the middle of the work week (assumed "business mindset")
+
+**Control**: Individuals with similar observable characteristics who receive calls at the beginning or end of the work week
+
+**Outcome**: Probability of subscribing to the term deposit product
+
+### Results 
+
+
+
+```{r}
+path_results <- list.files("results_analysis/", full.names = T)
+
+WEEKDAYS_RESULTS <- lapply(path_results[str_detect(path_results, "weekdays")], read_feather) |>
+  rbindlist()
+
+EOM_RESULTS <- lapply(path_results[str_detect(path_results, "eom")], read_feather) |>
+  rbindlist()
+```
+
+
+```{r}
+#| tbl-cap: "Change in take-up in middle of the week"
+
+WEEKDAYS_RESULTS |>
+  filter(str_detect(name, "all|MLPLR|MLIRM")) |> 
+  mutate(
+    across(where(is.numeric), ~as.character(format(round(.x, 4), scientific=F))),
+    name = str_remove_all(name, "-all") |> toupper(),
+    name = if_else(name=="CAUSAL-FOREST", "C-FOREST", name),
+    ci = paste0(ci_lower, "-", ci_upper)
+  ) |>
+  select(name, Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `CI 95%` = ci) |> 
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 9.5, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "2cm") |>
+  kableExtra::column_spec(2:5, width = "2.25cm") 
+  
+```
+
+All model specifications yield statistically significant results at the 5% level ($p < 0.05$), with the largest marginal effects observed in the logit model. Estimates derived from the partial linear model using an ensemble learner are the most conservative, likely due to its capacity to capture non-linear interactions. Similarly, the interactive regression model, which allows for fully heterogeneous effects, yields comparatively smaller estimates. This suggests that more flexible models tend to produce more attenuated effect sizes.
+
+In terms of practical significance, a marginal effect of 0.012 implies a roughly 10% increase over the average take-up rate. This level of improvement may be of interest to financial institutions considering similar marketing strategies.
+
+### Heterogeneity Analysis
+
+Given that occupation may moderate the effect of mid-week calls, we further analyze results across job categories.
+
+```{r, fig.align='center', fig.height=4.5, fig.width=7, message=FALSE, warning=FALSE, fig.cap="Change in take-up in middle of the week"}
+WEEKDAYS_RESULTS |>
+  filter(!str_detect(name, "all|MLPLR|MLIRM")) |>
+  mutate(
+    model = if_else(str_detect(name, "logit-"), "Logit", "Causal Forest"), 
+    job = str_remove_all(name, "causal-forest-|logit-")
+  ) |>
+  ggplot(aes(x=job, y=estimate, ymin = ci_lower, ymax = ci_upper, color = model))+
+  geom_point(position = position_dodge(width=0.5), size=1.25)+
+  geom_errorbar(width=0.5, position = position_dodge(width=.5))+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010", color="Model Type")+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  theme(text = element_text(family = "Times", size = 12), 
+        axis.text.x = element_text(size=8),
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0))+
+  geom_hline(yintercept = 0, linetype="dotted")
+```
+
+Logit-based marginal effects are statistically significant across most subpopulations, with particularly strong results for administrative workers, retirees, and students. Estimates from the causal forest are more noisy as the model imposes less structure and our dataset is not particularly large, most results are not significant at the standard 5% level. However, effects for administrative workers remain significant at the 5% level across both model types.
+
+These findings indicate the presence of job-related heterogeneity in responsiveness to mid-week outreach.
+
+## Time of the month
+
+We examine the effect of the time of the month on campaign success using a similar framework. A plausible hypothesis is that individuals may be more receptive to term deposit offers at the beginning of the month, when account balances are typically higher following salary payments.
+
+### PICO Description
+**Population**: Portuguese customers contacted by or contacting the bank
+
+**Intervention**: Calls made in the second half of the month 
+
+**Control**: Individuals with similar observable characteristics who received calls in the first half of the month
+
+**Outcome**: Probability of subscribing to the term deposit product
+
+### Results
+
+```{r}
+RESULTS_EOM_CF <- read_feather("results_analysis/eom_causal_forest.feather")
+RESULTS_EOM_LOGIT <- read_feather("results_analysis/eom_logit.feather")
+```
+
+```{r}
+#| tbl-cap: "Change in take-up end of month"
+
+EOM_RESULTS |>
+  filter(str_detect(name, "all|MLPLR|MLIRM")) |> 
+  mutate(
+    across(where(is.numeric), ~as.character(format(round(.x, 4), scientific=F))),
+    name = str_remove_all(name, "-all") |> toupper(),
+    name = if_else(name=="CAUSAL-FOREST", "C-FOREST", name),
+    ci = paste0(ci_lower, "-", ci_upper)
+  ) |>
+  select(name, Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `CI 95%` = ci) |> 
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 9.5, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "2cm") |>
+  kableExtra::column_spec(2:5, width = "2.25cm")
+  
+```
+
+
+Contrary to initial expectations, our results suggest that individuals are more likely to subscribe to a term deposit at the end of the month. These findings, however, appear less robust than those obtained for within-week variation. Once again, the logit model produces the largest estimated effects, whereas the partial linear model with an ensemble learner yields the most conservative estimates.
+
+While these results should be interpreted with caution, they do provide some evidence that the timing of calls within the month can influence responsiveness to financial product offers.
+
+### Heterogeneity Analysis
+
+We again extend the analysis by exploring heterogeneity across occupational groups. As in previous sections, results from the logit model remain consistently significant across groups, while the causal forest approach identifies statistically significant effects only for retirees. This suggests that retirees may be primarily responsible for the observed average treatment effect.
+
+```{r, fig.align='center', fig.height=4.5, fig.width=7, message=FALSE, warning=FALSE, fig.cap="Change in take-up at the end of the month"}
+EOM_RESULTS |>
+  filter(!str_detect(name, "all|MLPLR|MLIRM")) |>
+  mutate(
+    model = if_else(str_detect(name, "logit-"), "Logit", "Causal Forest"), 
+    job = str_remove_all(name, "causal-forest-|logit-")
+  ) |>
+  ggplot(aes(x=job, y=estimate, ymin = ci_lower, ymax = ci_upper, color = model))+
+  geom_point(position = position_dodge(width=0.5), size=1.25)+
+  geom_errorbar(width=0.5, position = position_dodge(width=.5))+
+  labs(x = "", y = "Coefficient", title="", caption = "Group level analysis, PT, 2008-2010", color="Model Type")+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  theme(text = element_text(family = "Times", size = 12), 
+        axis.text.x = element_text(size=8),
+        legend.position = "bottom", 
+        legend.margin = margin(-10,0,0,0))+
+  geom_hline(yintercept = 0, linetype="dotted")
+```
+
+We also find weak evidence of negative effects for entrepreneurs, who may be less inclined to commit to fixed-term products at the end of the month.
+
+\newpage
+
+# Macro Context
+
+This section analyzes macroeconomic determinants of the marketing campaign, focusing on the impact of interest rates on product take-up rates. The specific rate offered to consumers is unobserved; however, the product, a term deposit, is among the fastest to react to changes in market conditions. The 12-month EURIBOR rate is used as a proxy, given its strong predictive power for such products. The objective is to estimate consumer demand elasticity with respect to interest rates. This has two key implications for the offering bank: it informs the expected effect of offering a more competitive rate or supports assessment of campaign viability when pricing power is limited and rates are determined by market conditions.
+
+```{r macro_compute, eval=FALSE}
+set.seed(21457912)
+
+plan(multisession, workers = parallel::detectCores(logical = FALSE))
+
+## Data prep ----
+DATA_ADD_FULL <- read_feather("results_building/bank-additional-full.feather")
+
+LAG_EURIBOR <- DATA_ADD_FULL |> 
+  select(date_month, euribor_12mo) |> 
+  unique() |> 
+  mutate(euribor_12mo_l1 = lag(euribor_12mo))
+
+REG_DATA <- DATA_ADD_FULL |> 
+  left_join(LAG_EURIBOR, by= c("date_month", "euribor_12mo")) |>
+  mutate(across(c(poutcome, marital, job, housing, default, education), ~as.factor(.x))) |> 
+  filter(!is.na(euribor_12mo_l1)&campaign==1)
+
+## 2SLS ----
+
+start_2SLS <- Sys.time()
+IV_2SLS <- felm(y ~ age + unemployment + housing + default +  poutcome + job + marital + education | 0 | (euribor_12mo ~ euribor_12mo_l1), data=REG_DATA)
+compute_2SLS <- Sys.time() - start_2SLS
+
+summary(IV_2SLS)
+
+## Double ML
+
+dml_data <- DoubleMLData$new(
+  setDT(REG_DATA),
+  y_col = "y",
+  d_cols = "euribor_12mo",
+  z_cols = "euribor_12mo_l1",
+  x_cols = c("unemployment", "poutcome", "job", "marital", "housing", "default", "education", "age")
+)
+
+dml_pliv <- DoubleMLPLIV$new(
+  data = dml_data,
+  ml_g = lrn("regr.ranger"),
+  ml_m = lrn("regr.ranger"),
+  ml_l = lrn("regr.ranger"),
+  ml_r = lrn("regr.ranger"),
+  n_folds = 8,
+  n_rep = 4,
+  score = "IV-type"                 
+)
+
+param_set <- list(
+  ml_l = ps(num.trees = p_int(lower = 75, upper = 300)),
+  ml_m = ps(num.trees = p_int(lower = 75, upper = 300)),
+  ml_r = ps(num.trees = p_int(lower = 75, upper = 300))
+)
+
+tune_settings <- list(
+  rsmp_tune = rsmp("cv", folds = 5),
+  terminator = trm("evals", n_evals = 25),
+  algorithm = tnr("random_search"),
+  measure = list(ml_l = msr("regr.mse"), ml_m = msr("regr.mse"), ml_r = msr("regr.mse"))
+)
+
+dml_pliv$tune(param_set = param_set, tune_settings = tune_settings)
+
+start_dml <- Sys.time()
+dml_pliv$fit()
+compute_dml <- Sys.time() - start_dml
+
+dml_pliv$summary()
+
+## Probit-IV
+
+# 2nd stage: include residuals in a standard logit/probit
+start_PIV <- Sys.time()
+first <- lm(euribor_12mo ~ age + euribor_12mo_l1 + unemployment + housing + default + poutcome + job + marital+education, data = REG_DATA)
+REG_DATA$resid1 <- resid(first)
+probit_iv <- glm(y ~ age + euribor_12mo + resid1 + unemployment  + housing + default + poutcome + job + marital+education, 
+                 family = binomial(link = "probit"), data = REG_DATA)
+compute_PIV <- Sys.time() - start_PIV
+summary(probit_iv)
+
+mfx <- margins::margins(probit_iv, variables = "euribor_12mo")
+ame <- summary(mfx)
+
+## Exporting results ----
+estimate <- c(
+  IV_2SLS$coefficients[length(IV_2SLS$coefficients)], 
+  dml_pliv$coef, 
+  ame$AME
+)
+
+std_error <- c(
+  IV_2SLS$se[length(IV_2SLS$coefficients)], 
+  dml_pliv$se, 
+  ame$SE
+)
+
+p_value <- c(
+  IV_2SLS$pval[length(IV_2SLS$coefficients)], 
+  dml_pliv$pval, 
+  ame$p
+)
+
+compute <- c(
+  compute_2SLS, 
+  compute_dml, 
+  compute_PIV
+)
+
+RESULTS_MACRO <- data.frame(
+  name = c("IR-LPM2SLS-IV", "IR-DML-IV", "IR-Probit-IV"), 
+  estimate, std_error, p_value, ci_lower = NA, ci_upper = NA, 
+  compute = as.numeric(compute), row.names = NULL
+)
+
+write_feather(RESULTS_MACRO, "results_analysis/results_macro.feather")
+```
+
+
+## PICO summary
+
+**Population**: The population of interest consists of bank consumers; however, due to previously mentioned data limitations, the analysis is restricted to clients who participated in the marketing campaign. To simplify the study design, only clients who received a single call are included.
+
+**Intervention**: Variation in market interest rates which was particularly pronounced during the 2008–2010 period is leveraged to estimate demand elasticity.
+
+**Comparison**: Clients exposed to lower market interest rates serve as a control group for those exposed to higher interest rates.
+
+**Outcome**: The primary outcome of interest is the take-up of the offered savings product, measured as a change in the take-up rate.
+
+## DAG and Hypothesis
+
+The main challenge in identifying the effect of interest rates on take-up rates is endogeneity. Specifically, interest rates represent market prices for capital and are thus the joint outcome of both supply and demand. For a reference on demand estimation see \cite{berry_foundations_2021}.
+
+This is problematic because interest rates are correlated with demand shocks, which directly influence take-up behavior. A clear example is the bankruptcy of Lehman Brothers, which marked the onset of the great financial crisis. \newpage
+
+This significantly altered investor risk preferences, leading to a substantial inflow of capital into safer financial instruments such as deposits or fixed term accounts.
+
+The directed acyclic graph below summarizes the primary causal relationships assumed in this section.
+
+\begin{figure}
+\centering
+\caption{Interest Rates and Take-Up}
+\vspace{0.25cm}
+\tikzfig{ressources/tikz/fig2}
+\end{figure}
+\vspace{-1cm}
+
+Under the structure outlined in the DAG, the lagged interest rate at period $t-1$ can be considered a valid instrument, provided that variables influenced by this rate are appropriately controlled for. The intuition behind this instrument is based on interest rate stickiness: financial products are often priced based on previously observed rates, while current market rates reflect present expectations rather than past ones. Therefore, contemporaneous demand shocks can be assumed to be uncorrelated with lagged interest rates.
+
+This type of instrument and identification strategy is grounded in the macroeconomic literature (see \cite{blundell_initial_1998}). However, the exogeneity of the instrument cannot be formally tested and could be questionned in our case. The absence of strong alternative instruments in our dataset rule out the possibility of conducting over-identification tests such as the Sargan–J test.
+\newpage
+
+## Results 
+
+```{r}
+
+LAG_EURIBOR <- DATA_ADD_FULL |> 
+  select(date_month, euribor_12mo) |> 
+  unique() |> 
+  mutate(euribor_12mo_l1 = lag(euribor_12mo))
+
+REG_DATA <- DATA_ADD_FULL |> 
+  left_join(LAG_EURIBOR, by= c("date_month", "euribor_12mo")) |>
+  mutate(across(c(poutcome, marital, job, housing, default, education), ~as.factor(.x))) |> 
+  filter(!is.na(euribor_12mo_l1)&campaign==1)
+
+```
+
+
+To estimate causal effects, three methodological approaches are employed and compared: (i) a standard two-stage least squares (2SLS) estimator applied to a linear probability model, (ii) a double machine learning (DML) estimator for a partially linear instrumental variables (IV) regression, and (iii) a probit IV regression.
+
+
+```{r}
+#| tbl-cap: "Results from IV estimation"
+
+RESULTS_MACRO <- read_feather("results_analysis/results_macro.feather")
+RESULTS_MACRO |> 
+  rename(Estimate = estimate, `Std Errors` = std_error, `p-value` = p_value, `Compute (s)` = compute)|> 
+  mutate(name = str_remove_all(name, "IR-")) |>
+  pivot_longer(-name, names_to = "Statistic") |> 
+  remove_missing() |>
+  pivot_wider(names_from = name, values_from = value) |>
+  knitr::kable(format= "latex", booktabs = T, linesep = "", digits = 4, align = "c") |>
+  kableExtra::kable_styling(font_size = 11, latex_options = "HOLD_position") |>
+  kableExtra::column_spec(1, width = "4.5cm") |>
+  kableExtra::column_spec(2:4, width = "2.5cm")
+
+```
+
+All models yield statistically significant positive effects, indicating that higher interest rates increase the probability of subscription. The estimated local average treatment effects are economically substantial, ranging from 15% to nearly 40% of the baseline take-up rate.
+
+The 2SLS linear probability model produces the largest point estimates, while the two-stage probit model yields the most conservative figures. The DML-IV estimator lies in between, likely capturing nonlinear effects missed by the LPM but without the parametric constraints of the probit model.
+
+A remark which was not made often in this report is that compute differences are massive between traditional econometric methods and ml based approaches. Not accounting for tuning the DDML-IV was 791 times slower than the basic TSLS LPM model. 
+
+\newpage
+
+# Conclusion 
+
+## Discussion
+
+This report provides empirical evidence that timing significantly influences the success of telemarketing campaigns. While traditional campaign strategies often focus on targeting the "right" individuals, our results suggest that "when" a potential client is contacted is equally important. For marketing professionals, this implies that optimal campaign design requires a dual focus: identifying both receptive individuals and favorable timing.
+
+We employed a range of econometric and machine learning methods to estimate treatment effects and evaluate model performance. These approaches highlighted both the advantages and the limitations of flexible models in campaign evaluation and policy simulation.
+
+Additionally, we estimated interest rate elasticities of demand for term deposit products, offering important insights for banks in their pricing strategies. These results underscore the relevance of incorporating demand-side behavior into macro-level financial planning.
+
+## Limitations 
+
+Several limitations must be acknowledged. First, the data restricts the credibility and generalizability of our findings. Specifically, non-response bias may distort our estimates—individuals who do not answer phone calls may systematically differ in unobserved ways (e.g., being busier on certain days), potentially confounding our treatment effects.
+
+Second, data constraints prevent analysis of follow-up call timing. Understanding when to re-engage with non-respondents is a critical component of effective campaign design. Unfortunately, we cannot  address this question, but we encourage future work in this area.
+
+Finally, our methodological comparisons would benefit from simulation studies under known and controlled data-generating processes (DGPs). Such studies would enable a more rigorous evaluation of estimator performance, particularly in contexts with limited sample sizes and complex interactions.
+
+\newpage
+
+# Bibliography
+\nocite{*}
+\begingroup
+\let\clearpage\relax
+\printbibliography[heading=none]
+\endgroup
+
+\newpage
+
+\setcounter{section}{0}
+\renewcommand\thesection{\Alph{section}}
+
+# Appendix
+
+## Additional statistics 
+
+We report some additional descriptive statistics.
+
+```{r}
+#| tbl-cap: "Observed Marital Status"
+DATA_ADD_FULL |>
+  group_by(`Marital Status` = marital) |>
+  count_prop() |>
+  knitr_counts()
+```
+
+Most of the individuals in our sample are married.
+
+```{r}
+#| tbl-cap: "Observed Education Level"
+DATA_ADD_FULL |>
+  group_by(`Education` = education) |>
+  count_prop() |>
+  knitr_counts()
+```
+
+We have a wide range of educational outcomes in our data and many professions are also represented in our sample.
+
+```{r}
+#| tbl-cap: "Observed Job Titles"
+DATA_ADD_FULL |>
+  group_by(`Job Titles` = job) |>
+  count_prop() |>
+  knitr_counts()
+```
+
+
+
+
+ 
